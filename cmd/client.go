@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"fmt"
+	"github.com/arcward/gokv/build"
 	"github.com/arcward/gokv/client"
 	"github.com/spf13/cobra"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 )
 
@@ -15,17 +18,69 @@ var clientCmd = &cobra.Command{
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		opts := &cliOpts
+
+		if opts.Verbose {
+			opts.LogLevel.Value = slog.LevelDebug
+		}
+		if opts.SSLCertfile != "" {
+			opts.Client.SSLCertfile = opts.SSLCertfile
+		}
+
 		cfg := opts.Client
 		cfg.Context = ctx
-		cfg.Address = opts.Address
-		if !opts.Verbose {
-			log.SetOutput(io.Discard)
+
+		u, err := parseURL(opts.Address)
+		if err != nil {
+			return fmt.Errorf("invalid address: %w", err)
 		}
+		if u.Scheme == "unix" {
+			opts.Address = u.String()
+		} else {
+			opts.Address = u.Host
+		}
+		cfg.Address = opts.Address
+
+		if opts.LogLevel.Value == 0 && !opts.Verbose && !rootCmd.Flags().Changed("log-level") {
+			opts.LogLevel.Value = slog.LevelWarn
+		}
+
+		var out io.Writer
+		if opts.Quiet {
+			out = io.Discard
+		} else {
+			out = os.Stderr
+		}
+		log.SetOutput(out)
+
+		handlerOptions := &slog.HandlerOptions{
+			Level:     cliOpts.LogLevel,
+			AddSource: true,
+		}
+
+		var handler slog.Handler
+
+		if opts.LogJSON {
+			handler = slog.NewJSONHandler(out, handlerOptions)
+		} else {
+			handler = slog.NewTextHandler(out, handlerOptions)
+		}
+		defaultLogger = slog.New(handler).WithGroup("gokv")
+		if build.Version != "" {
+			defaultLogger = defaultLogger.With(
+				slog.String(
+					"version",
+					build.Version,
+				),
+			)
+		}
+		slog.SetDefault(defaultLogger)
+
+		cfg.Logger = defaultLogger
 		client := client.NewClient(cfg)
 		opts.client = client
-		err := client.Dial()
+		err = client.Dial()
 		if err != nil {
-			log.Fatalf("unable to connect: %s", err.Error())
+			log.Fatalf("unable to connect: %s\n", err.Error())
 		}
 
 		go func() {
@@ -41,7 +96,6 @@ var clientCmd = &cobra.Command{
 				}
 			}
 		}()
-		//opts.client = api.NewKeyValueStoreClient(conn)
 		return err
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -63,5 +117,18 @@ func init() {
 		"no-tls",
 		false,
 		"disables TLS",
+	)
+	clientCmd.PersistentFlags().BoolVarP(
+		&cliOpts.Verbose,
+		"verbose",
+		"v",
+		false,
+		"(Client only) Enables debug-level logging",
+	)
+	clientCmd.PersistentFlags().IntVar(
+		&cliOpts.IndentJSON,
+		"indent",
+		0,
+		"Number of spaces to indent client JSON output",
 	)
 }

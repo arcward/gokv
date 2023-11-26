@@ -1,0 +1,50 @@
+FROM golang:1.21-alpine as builder
+
+
+ARG CGO_ENABLED=0
+ARG GOOS=linux
+ARG GOARCH=amd64
+
+WORKDIR /app
+
+ENV CGO_ENABLED=${CGO_ENABLED}
+ENV GOOS=${GOOS}
+ENV GOARCH=${GOARCH}
+
+COPY go.mod ./
+
+RUN go mod download
+
+COPY . .
+
+RUN go build -o dist/bin/gokv-linux-amd64
+
+FROM scratch
+
+ARG CGO_ENABLED
+ARG GOOS
+ARG GOARCH
+
+ENV CGO_ENABLED=${CGO_ENABLED}
+ENV GOOS=${GOOS}
+ENV GOARCH=${GOARCH}
+
+ENV GOKV_ADDRESS=":33969"
+ENV GOKV_LOG_LEVEL=info
+ENV GOKV_MAX_VALUE_SIZE=1000000
+ENV GOKV_MAX_KEY_SIZE=1000
+ENV GOKV_MAX_KEYS=0
+ENV GOKV_REVISION_LIMIT=0
+ENV GOKV_HASH_ALGORITHM=MD5
+#ENV GOKV_BACKUP="/data/backup.json"
+#ENV GOKV_SSL_CERTFILE=/etc/ssl/certs/gokv.crt
+#ENV GOKV_SSL_KEYFILE=/etc/ssl/certs/gokv.key
+
+#ENV GRPC_GO_LOG_VERBOSITY_LEVEL=99
+#ENV GRPC_GO_LOG_SEVERITY_LEVEL=info
+
+COPY --from=builder /app/dist/bin/gokv-linux-amd64 /go/bin/gokv
+
+EXPOSE 33969
+
+ENTRYPOINT ["/go/bin/gokv"]

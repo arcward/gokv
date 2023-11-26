@@ -2,7 +2,7 @@ syntax = "proto3";
 
 option go_package = "github.com/arcward/gokv/api";
 
-
+import "google/protobuf/timestamp.proto";
 
 package gokv;
 
@@ -56,7 +56,7 @@ message GetRevisionRequest {
 
 message RevisionResponse {
   bytes value = 1;
-  int64 timestamp = 2;
+  google.protobuf.Timestamp timestamp = 2;
 }
 
 message EmptyRequest {}
@@ -129,13 +129,14 @@ message ClearHistoryResponse {
 message GetKeyValueInfoResponse {
   string key = 1 ; // Key of value
   string hash = 2; // MD5 hash of value
-  int64 created = 3;  // Unix timestamp of when the key was created
-  int64 updated = 4;  // Unix timestamp of when the key was last updated
+  google.protobuf.Timestamp created = 3;  // Unix timestamp of when the key was created
+  optional google.protobuf.Timestamp updated = 4;  // Unix timestamp of when the key was last updated
   uint64 version = 5;  // Version of the key (incremented on each update)
-  int64 accessed = 6; // Unix timestamp of when the key's value was last accessed
+  optional google.protobuf.Timestamp accessed = 6; // Unix timestamp of when the key's value was last accessed
   uint64 size = 7;  // Size of the value in bytes
   bool locked = 8;  // true if the key is locked
   string content_type = 9; // Content type of the value
+  bool expired = 10; // true if the key is expired
 }
 
 // Key represents only a key

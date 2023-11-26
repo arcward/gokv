@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"fmt"
 	pb "github.com/arcward/gokv/api"
 	"github.com/spf13/cobra"
 )
@@ -9,16 +8,12 @@ import (
 var statsCmd = &cobra.Command{
 	Use:   "stats",
 	Short: "Get server stats",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	Run: func(cmd *cobra.Command, args []string) {
 		ctx := cmd.Context()
 		opts := &cliOpts
 		kv, err := opts.client.Stats(ctx, &pb.EmptyRequest{})
-		if err != nil {
-			return err
-		}
-		fmt.Println(kv.String())
-
-		return nil
+		printError(err)
+		printResult(kv)
 	},
 }
 

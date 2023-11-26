@@ -14,14 +14,19 @@ import (
 )
 
 type Client struct {
-	client    api.KeyValueStoreClient
-	conn      *grpc.ClientConn
-	cfg       ClientConfig
-	ctx       context.Context
-	callOpts  []grpc.CallOption
-	dialOpts  []grpc.DialOption
-	logger    *slog.Logger
-	tlsConfig *tls.Config
+	client   api.KeyValueStoreClient
+	conn     *grpc.ClientConn
+	cfg      ClientConfig
+	ctx      context.Context
+	callOpts []grpc.CallOption
+	dialOpts []grpc.DialOption
+	logger   *slog.Logger
+}
+
+func (c *Client) requestLogger(ctx context.Context) *slog.Logger {
+	return c.logger.With(
+		slog.String("remote", c.conn.Target()),
+	)
 }
 
 func (c *Client) Set(
@@ -29,8 +34,16 @@ func (c *Client) Set(
 	in *api.KeyValue,
 	opts ...grpc.CallOption,
 ) (*api.SetResponse, error) {
+	logger := c.requestLogger(ctx)
+	logger.Info("setting/updating key", slog.String("key", in.Key))
 	opts = append(opts, c.callOpts...)
-	return c.client.Set(ctx, in, opts...)
+	rv, err := c.client.Set(ctx, in, opts...)
+	logger.Debug(
+		"set response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 func (c *Client) Get(
@@ -38,16 +51,36 @@ func (c *Client) Get(
 	in *api.Key,
 	opts ...grpc.CallOption,
 ) (*api.GetResponse, error) {
+	logger := c.requestLogger(ctx)
+	logger.Info("getting value", slog.String("key", in.Key))
 	opts = append(opts, c.callOpts...)
-	return c.client.Get(ctx, in, opts...)
+	rv, err := c.client.Get(ctx, in, opts...)
+	logger.Debug(
+		"get response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 func (c *Client) GetRevision(
 	ctx context.Context,
 	in *api.GetRevisionRequest,
 ) (*api.RevisionResponse, error) {
+	logger := c.requestLogger(ctx)
+	logger.Info(
+		"getting key revision",
+		slog.String("key", in.Key),
+		slog.Uint64("version", in.Version),
+	)
 	opts := append(c.callOpts, grpc.MaxCallRecvMsgSize(1024*1024*1024))
-	return c.client.GetRevision(ctx, in, opts...)
+	rv, err := c.client.GetRevision(ctx, in, opts...)
+	logger.Debug(
+		"get revision response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 func (c *Client) GetKeyInfo(
@@ -55,8 +88,16 @@ func (c *Client) GetKeyInfo(
 	in *api.Key,
 	opts ...grpc.CallOption,
 ) (*api.GetKeyValueInfoResponse, error) {
+	logger := c.requestLogger(ctx)
+	logger.Info("getting key info", slog.String("key", in.Key))
 	opts = append(opts, c.callOpts...)
-	return c.client.GetKeyInfo(ctx, in, opts...)
+	rv, err := c.client.GetKeyInfo(ctx, in, opts...)
+	logger.Debug(
+		"key info response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 func (c *Client) Delete(
@@ -64,8 +105,17 @@ func (c *Client) Delete(
 	in *api.Key,
 	opts ...grpc.CallOption,
 ) (*api.DeleteResponse, error) {
+	logger := c.requestLogger(ctx)
+	logger.Info("deleting key", slog.String("key", in.Key))
 	opts = append(opts, c.callOpts...)
-	return c.client.Delete(ctx, in, opts...)
+	rv, err := c.client.Delete(ctx, in, opts...)
+	logger.Debug(
+		"delete response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
+
 }
 
 func (c *Client) Exists(
@@ -73,8 +123,15 @@ func (c *Client) Exists(
 	in *api.Key,
 	opts ...grpc.CallOption,
 ) (*api.ExistsResponse, error) {
+	logger := c.requestLogger(ctx)
 	opts = append(opts, c.callOpts...)
-	return c.client.Exists(ctx, in, opts...)
+	rv, err := c.client.Exists(ctx, in, opts...)
+	logger.Debug(
+		"exists response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 func (c *Client) Pop(
@@ -82,8 +139,11 @@ func (c *Client) Pop(
 	in *api.Key,
 	opts ...grpc.CallOption,
 ) (*api.GetResponse, error) {
+	logger := c.requestLogger(ctx)
 	opts = append(opts, c.callOpts...)
-	return c.client.Pop(ctx, in, opts...)
+	rv, err := c.client.Pop(ctx, in, opts...)
+	logger.Debug("response", slog.Any("response", rv), slog.Any("error", err))
+	return rv, err
 }
 
 func (c *Client) Clear(
@@ -91,8 +151,15 @@ func (c *Client) Clear(
 	in *api.EmptyRequest,
 	opts ...grpc.CallOption,
 ) (*api.ClearResponse, error) {
+	logger := c.requestLogger(ctx)
 	opts = append(opts, c.callOpts...)
-	return c.client.Clear(ctx, in, opts...)
+	rv, err := c.client.Clear(ctx, in, opts...)
+	logger.Debug(
+		"clear response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 func (c *Client) ListKeys(
@@ -100,8 +167,15 @@ func (c *Client) ListKeys(
 	in *api.ListKeysRequest,
 	opts ...grpc.CallOption,
 ) (*api.ListKeysResponse, error) {
+	logger := c.requestLogger(ctx)
 	opts = append(opts, c.callOpts...)
-	return c.client.ListKeys(ctx, in, opts...)
+	rv, err := c.client.ListKeys(ctx, in, opts...)
+	logger.Debug(
+		"list keys response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 func (c *Client) Stats(
@@ -110,7 +184,13 @@ func (c *Client) Stats(
 	opts ...grpc.CallOption,
 ) (*api.ServerMetrics, error) {
 	opts = append(opts, c.callOpts...)
-	return c.client.Stats(ctx, in, opts...)
+	rv, err := c.client.Stats(ctx, in, opts...)
+	c.logger.Debug(
+		"stats response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 func (c *Client) ClearHistory(
@@ -118,8 +198,15 @@ func (c *Client) ClearHistory(
 	in *api.EmptyRequest,
 	opts ...grpc.CallOption,
 ) (*api.ClearHistoryResponse, error) {
+	logger := c.requestLogger(ctx)
 	opts = append(opts, c.callOpts...)
-	return c.client.ClearHistory(ctx, in, opts...)
+	rv, err := c.client.ClearHistory(ctx, in, opts...)
+	logger.Debug(
+		"clear history response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 func (c *Client) Lock(
@@ -127,8 +214,15 @@ func (c *Client) Lock(
 	in *api.LockRequest,
 	opts ...grpc.CallOption,
 ) (*api.LockResponse, error) {
+	logger := c.requestLogger(ctx)
 	opts = append(opts, c.callOpts...)
-	return c.client.Lock(ctx, in, opts...)
+	rv, err := c.client.Lock(ctx, in, opts...)
+	logger.Debug(
+		"lock response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 func (c *Client) Unlock(
@@ -136,8 +230,15 @@ func (c *Client) Unlock(
 	in *api.UnlockRequest,
 	opts ...grpc.CallOption,
 ) (*api.UnlockResponse, error) {
+	logger := c.requestLogger(ctx)
 	opts = append(opts, c.callOpts...)
-	return c.client.Unlock(ctx, in, opts...)
+	rv, err := c.client.Unlock(ctx, in, opts...)
+	logger.Debug(
+		"unlock response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 type ClientConfig struct {
@@ -169,7 +270,7 @@ func NewClient(cfg ClientConfig, opts ...grpc.DialOption) *Client {
 	client.ctx = cfg.Context
 
 	if cfg.Logger == nil {
-		cfg.Logger = slog.Default().WithGroup("gokv_server")
+		cfg.Logger = slog.Default().WithGroup("gokv_client")
 	}
 	client.logger = cfg.Logger
 
@@ -182,8 +283,11 @@ func NewClient(cfg ClientConfig, opts ...grpc.DialOption) *Client {
 	}
 
 	if cfg.DialTimeout > 0 {
-		client.ctx, _ = context.WithTimeout(client.ctx, cfg.DialTimeout)
+		cctx, cancel := context.WithTimeout(client.ctx, cfg.DialTimeout)
+		client.ctx = cctx
+		defer cancel()
 	}
+	var tlsEnabled bool
 
 	if cfg.SSLCertfile != "" {
 		creds, err := credentials.NewClientTLSFromFile(
@@ -197,6 +301,7 @@ func NewClient(cfg ClientConfig, opts ...grpc.DialOption) *Client {
 			opts,
 			grpc.WithTransportCredentials(creds),
 		)
+		tlsEnabled = true
 	}
 	if cfg.InsecureSkipVerify {
 		tlsConfig := &tls.Config{InsecureSkipVerify: true}
@@ -205,9 +310,10 @@ func NewClient(cfg ClientConfig, opts ...grpc.DialOption) *Client {
 			opts,
 			grpc.WithTransportCredentials(creds),
 		)
+		tlsEnabled = true
 	}
-
-	if cfg.NoTLS {
+	if cfg.NoTLS || !tlsEnabled {
+		cfg.Logger.Warn("TLS is disabled")
 		opts = append(
 			opts,
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -215,22 +321,6 @@ func NewClient(cfg ClientConfig, opts ...grpc.DialOption) *Client {
 	}
 
 	client.dialOpts = append(client.dialOpts, opts...)
-
-	//go func() {
-	//	for {
-	//		select {
-	//		case <-client.ctx.Done():
-	//			client.logger.Info("closing connection")
-	//			if e := client.conn.Close(); e != nil {
-	//				client.logger.Error(
-	//					"error closing connection",
-	//					slog.String("error", e.Error()),
-	//				)
-	//			}
-	//		}
-	//	}
-	//}()
-
 	return client
 }
 
@@ -256,6 +346,7 @@ func (c *Client) Dial() error {
 			)
 		}
 	}
+	c.logger.Debug("connecting", slog.String("address", c.cfg.Address))
 	conn, err := grpc.DialContext(c.ctx, c.cfg.Address, c.dialOpts...)
 	if err != nil {
 		c.logger.Error(

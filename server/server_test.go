@@ -2,18 +2,18 @@ package server
 
 import (
 	"context"
+	"crypto"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/arcward/gokv/client"
+	gokv_client "github.com/arcward/gokv/client"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"io"
-	"log"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -33,7 +33,7 @@ var ctx context.Context
 var cancel context.CancelFunc
 
 func init() {
-	log.SetOutput(io.Discard)
+	//log.SetOutput(io.Discard)
 	lis = bufconn.Listen(bufSize)
 	if s == nil {
 		s = grpc.NewServer()
@@ -42,8 +42,8 @@ func init() {
 	ctx, cancel = context.WithCancel(context.Background())
 	if srv == nil {
 		srv = NewServer(
-			Config{
-				Hashing:       HashConfig{Enabled: true},
+			&Config{
+				HashAlgorithm: crypto.MD5,
 				RevisionLimit: 2,
 			},
 		)
@@ -78,7 +78,7 @@ func useServerConfig(t *testing.T, cfg Config) {
 	)
 }
 
-func newClient(t *testing.T) *client.Client {
+func newClient(t *testing.T) *gokv_client.Client {
 	t.Helper()
 
 	tctx, tcancel := context.WithTimeout(ctx, 30*time.Second)
@@ -89,22 +89,17 @@ func newClient(t *testing.T) *client.Client {
 	)
 	t.Cleanup(
 		func() {
+			srv.mu.Lock()
+			defer srv.mu.Unlock()
 			srv.clear()
-			srv.resetStats()
 		},
 	)
-	client := client.NewClient(
-		client.ClientConfig{
+	client := gokv_client.NewClient(
+		gokv_client.ClientConfig{
 			NoTLS:   true,
 			Address: "bufnet",
 		}, grpc.WithContextDialer(bufDialer),
 	)
-	//conn, err := grpc.DialContext(
-	//	tctx,
-	//	"bufnet",
-	//	grpc.WithContextDialer(bufDialer),
-	//	grpc.WithInsecure(),
-	//)
 	err := client.Dial()
 	if err != nil {
 		t.Fatalf("Failed to dial bufnet: %v", err)
@@ -122,7 +117,6 @@ func newClient(t *testing.T) *client.Client {
 			}
 		case <-ctx.Done():
 			panic("done called")
-			tcancel()
 		}
 	}()
 	return client
@@ -192,79 +186,9 @@ func BenchmarkKeyValueStore(b *testing.B) {
 		)
 		benchmarkFailOnErr(b, err)
 
-		//_, err = client.Set(
-		//	ctx,
-		//	&pb.KeyValue{
-		//		Key:   key,
-		//		Value: []byte(string(value) + "-ext"),
-		//	},
-		//)
-		//benchmarkFailOnErr(b, err)
-
 	}
 
 }
-
-//
-//func TestBigStuff(t *testing.T) {
-//	t.Skip()
-//	client := newClient(t)
-//
-//	keys := make([]string, 50000, 50000)
-//
-//	for i := 0; i < 50000; i++ {
-//		kv := &pb.KeyValue{
-//			Key:   fmt.Sprintf("key-%d", i),
-//			Value: []byte(fmt.Sprintf("value-%d", i)),
-//		}
-//		keys[i] = kv.Key
-//		_, _ = client.Set(
-//			ctx, kv,
-//		)
-//	}
-//
-//	if srv.numKeys.Load() != 50000 {
-//		t.Fatalf("expected 50000 keys, got %d", srv.numKeys.Load())
-//	}
-//
-//	updates := make([]*pb.KeyValue, 50000, 50000)
-//
-//	for i := 0; i < 50000; i++ {
-//		key := fmt.Sprintf("key-%d", i)
-//		value := []byte(fmt.Sprintf("value-%d", i))
-//		updates[i] = &pb.KeyValue{
-//			Key:   key,
-//			Value: value,
-//		}
-//	}
-//
-//	for _, tc := range updates {
-//		tc = tc
-//		_, err := client.Set(ctx, tc)
-//		failOnErr(t, err)
-//		tc.Value = []byte(string(tc.Value) + "-ext")
-//		//&pb.KeyValue{Key: tc.Key, Value: []byte(string(tc.Value) + "-ext")}
-//		_, err = client.Set(ctx, tc)
-//		failOnErr(t, err)
-//
-//		_, err = client.Append(ctx, tc)
-//		failOnErr(t, err)
-//
-//		_, err = client.Delete(ctx, &pb.Key{Key: tc.Key})
-//		failOnErr(t, err)
-//	}
-//	//for _, tc := range updates {
-//	//	tc = tc
-//	//	t.Run(
-//	//		tc.Key, func(t *testing.T) {
-//	//			t.Parallel()
-//	//			_, err := client.Set(ctx, tc)
-//	//			failOnErr(t, err)
-//	//		},
-//	//	)
-//	//}
-//
-//}
 
 func TestListKeys(t *testing.T) {
 	client := newClient(t)
@@ -348,8 +272,10 @@ func TestGetExpiredKey(t *testing.T) {
 
 	_, err = client.Get(ctx, &pb.Key{Key: kv.Key})
 	assertNotNil(t, err)
+
 	e, ok := status.FromError(err)
 	assertEqual(t, ok, true)
+	fmt.Println(e.Message())
 	assertErrorCode(t, e.Code(), codes.NotFound)
 
 }
@@ -413,7 +339,6 @@ func TestKeyHistory(t *testing.T) {
 	firstRevision := keyInfo.History[0]
 	assertEqual(t, firstRevision.Version, 0)
 	assertSlicesEqual(t, firstRevision.Value, originalValue)
-	assertEqual(t, firstRevision.Updated.IsZero(), true)
 
 	var previousRevision *KeyValueSnapshot
 
@@ -424,7 +349,6 @@ func TestKeyHistory(t *testing.T) {
 		assertEqual(t, rev.Timestamp.IsZero(), false)
 		if previousRevision != nil {
 			assertEqual(t, rev.Version, previousRevision.Version+1)
-			assertEqual(t, rev.Updated.IsZero(), false)
 			val := []byte(fmt.Sprintf("%s-%d", string(originalValue), ind))
 			assertSlicesEqual(t, rev.Value, val)
 		}
@@ -526,8 +450,9 @@ func TestKeyLock(t *testing.T) {
 	assertEqual(t, kvInfo.Locked, false)
 
 	// lock it for 5 seconds
-	//now := time.Now()
+	now := time.Now()
 	var lockDuration uint32 = 5
+	unlockedAt := now.Add(time.Duration(lockDuration) * time.Second)
 	lockRequest := &pb.LockRequest{Key: pk.Key, Duration: lockDuration}
 	rv, err := client.Lock(ctx, lockRequest)
 	failOnErr(t, err)
@@ -560,7 +485,15 @@ func TestKeyLock(t *testing.T) {
 	assertEqual(t, keyInfo.LockedAt.IsZero(), false)
 
 	// sleep until unlocked
-	time.Sleep(keyInfo.lockDuration + 1*time.Second)
+	t.Logf(
+		"waiting until %s for unlock (%d seconds from %s)",
+		unlockedAt.String(),
+		keyInfo.LockDuration,
+		keyInfo.LockedAt.String(),
+	)
+	for n := time.Now(); n.Before(unlockedAt); n = time.Now() {
+		time.Sleep(1 * time.Second)
+	}
 
 	kx.Value = []byte("baz")
 	kx.Lock = false
@@ -627,6 +560,27 @@ func TestKeyLock(t *testing.T) {
 	assertEqual(t, ok, false)
 }
 
+func TestPopUnknownKey(t *testing.T) {
+	client := newClient(t)
+	_, err := client.Pop(ctx, &pb.Key{Key: "foo"})
+	assertNotNil(t, err)
+	e, _ := status.FromError(err)
+	assertErrorCode(t, e.Code(), codes.NotFound)
+}
+
+func TestPopLockedKey(t *testing.T) {
+	client := newClient(t)
+	_, err := client.Set(
+		ctx,
+		&pb.KeyValue{Key: "foo", Lock: true, Value: []byte("bar")},
+	)
+	failOnErr(t, err)
+	_, err = client.Pop(ctx, &pb.Key{Key: "foo"})
+	assertNotNil(t, err)
+	e, _ := status.FromError(err)
+	assertErrorCode(t, e.Code(), codes.PermissionDenied)
+}
+
 func TestKeyValueStore(t *testing.T) {
 	client := newClient(t)
 
@@ -670,7 +624,7 @@ func TestKeyValueStore(t *testing.T) {
 	assertEqual(t, srv.numKeys.Load(), 1)
 	assertEqual(t, kvInfo.Version, 0) // first version
 	assertEqual(t, kvInfo.Size, initialSize)
-	assertNotEqual(t, kvInfo.Accessed, 0)
+	assertEqual(t, kvInfo.Accessed.AsTime().IsZero(), false)
 	originalAccessed := kvInfo.Accessed
 	getKeyInfoRequests++
 
@@ -679,9 +633,9 @@ func TestKeyValueStore(t *testing.T) {
 	assertNotEqual(t, originalHash, "")
 
 	// Created timestamp should've been populated
-	created := time.Unix(kvInfo.Created, 0)
+	created := kvInfo.Created.AsTime()
 	assertEqual(t, created.IsZero(), false)
-	assertEqual(t, kvInfo.Updated, 0) // no updates yet
+	assertEqual(t, kvInfo.Updated.AsTime().Unix(), 0) // no updates yet
 
 	// update the value
 	newValue := []byte("foo")
@@ -699,20 +653,28 @@ func TestKeyValueStore(t *testing.T) {
 	failOnErr(t, err)
 	assertSlicesEqual(t, resp.Value, newValue)
 	secondAccessed := srv.store[key].Accessed.UnixNano()
-	assertGreaterOrEqual(t, secondAccessed, originalAccessed)
+	assertGreaterOrEqual(
+		t,
+		secondAccessed,
+		originalAccessed.AsTime().UnixNano(),
+	)
 	getRequests++
 
 	kvInfo, err = client.GetKeyInfo(ctx, &pb.Key{Key: key})
 	failOnErr(t, err)
-	assertEqual(t, kvInfo.Version, 1)    // second version
-	assertNotEqual(t, kvInfo.Updated, 0) // should've been set
-	assertLessThanOrEqualTo(t, kvInfo.Created, kvInfo.Updated)
+	assertEqual(t, kvInfo.Version, 1)                    // second version
+	assertNotEqual(t, kvInfo.Updated.AsTime().Unix(), 0) // should've been set
+	assertLessThanOrEqualTo(
+		t,
+		kvInfo.Created.AsTime().Unix(),
+		kvInfo.Updated.AsTime().Unix(),
+	)
 	assertEqual(t, kvInfo.Size, secondSize)
 	assertNotEqual(t, originalHash, kvInfo.Hash)
 	assertNotEqual(t, kvInfo.Hash, "")
 	getKeyInfoRequests++
 
-	updated := time.Unix(kvInfo.Updated, 0)
+	updated := kvInfo.Updated.AsTime()
 	assertEqual(t, updated.IsZero(), false)
 
 	var nonNegative bool
@@ -778,27 +740,6 @@ func TestKeyValueStore(t *testing.T) {
 	assertEqual(t, *stats.ExistsRequests, existsRequests)
 }
 
-func TestJSONThing(t *testing.T) {
-	client := newClient(t)
-	key := "testKey"
-	value := []byte("123456")
-
-	_, err := client.Set(ctx, &pb.KeyValue{Key: key, Value: value})
-	failOnErr(t, err)
-
-	kvInfo, err := client.GetKeyInfo(ctx, &pb.Key{Key: key})
-	failOnErr(t, err)
-
-	data, err := json.MarshalIndent(kvInfo, "", "  ")
-	failOnErr(t, err)
-	fmt.Printf("result:\n%s\n", string(data))
-
-	val, err := client.Get(ctx, &pb.Key{Key: key})
-	failOnErr(t, err)
-	data, err = json.MarshalIndent(val, "", "  ")
-	fmt.Printf("result:\n%s\n", string(data))
-}
-
 func TestDetectContentType(t *testing.T) {
 	logo := getGoLogo(t)
 	client := newClient(t)
@@ -853,25 +794,100 @@ func getGoLogo(t *testing.T) []byte {
 	return file
 }
 
-func TestRestore(t *testing.T) {
-	tempServer := NewServer(Config{})
+func TestRestoreExistingFile(t *testing.T) {
+	tempServer := NewServer(&Config{})
 	assertEqual(t, len(tempServer.store), 0)
+
 	f := filepath.Join("testdata", "restore.json")
 	file, err := os.ReadFile(f)
 	failOnErr(t, err)
-	err = tempServer.Restore(file)
+
+	ct, err := tempServer.Restore(file)
 	failOnErr(t, err)
+	assertEqual(t, ct, 2)
 
 	assertEqual(t, len(tempServer.store), 2)
 	fmt.Printf("%#v\n", tempServer.store)
 
 	kv := tempServer.store["foo"]
-	failOnErr(t, err)
-	fmt.Printf("%#v\n", kv)
 	assertSlicesEqual(t, kv.Value, []byte("bar"))
+
 	kv = tempServer.store["bar"]
-	failOnErr(t, err)
 	assertSlicesEqual(t, kv.Value, []byte("baz"))
+}
+
+func TestEvents(t *testing.T) {
+	srv.WithEventStream(ctx)
+	client := newClient(t)
+
+	x := srv.Subscribe()
+	y := srv.Subscribe()
+	z := srv.Subscribe()
+
+	xResults := []Event{}
+	yResults := []Event{}
+	zResults := []Event{}
+
+	wg := &sync.WaitGroup{}
+	go func() {
+		wg.Add(1)
+		defer wg.Done()
+		for {
+			if len(xResults) == 3 && len(yResults) == 3 && len(zResults) == 3 {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				t.Log("context cancelled")
+			case xv := <-x:
+				t.Logf("x: got event: %#v", xv)
+				xResults = append(xResults, xv)
+			case yv := <-y:
+				t.Logf("y: got event: %#v", yv)
+				yResults = append(yResults, yv)
+			case zv := <-z:
+				t.Logf("z: got event: %#v", zv)
+				zResults = append(zResults, zv)
+			}
+		}
+	}()
+
+	foo := &pb.KeyValue{Key: "foo", Value: []byte("bar")}
+	fooUpdate := &pb.KeyValue{Key: "foo", Value: []byte("baz")}
+	_, err := client.Set(ctx, foo)
+	failOnErr(t, err)
+
+	_, err = client.Set(ctx, fooUpdate)
+	failOnErr(t, err)
+
+	_, err = client.Delete(ctx, &pb.Key{Key: "foo"})
+	failOnErr(t, err)
+
+	wg.Wait()
+
+	t.Logf("x: %#v", xResults)
+	t.Logf("y: %#v", yResults)
+	t.Logf("z: %#v", zResults)
+
+	assertEqual(t, len(xResults), 3)
+	assertEqual(t, len(yResults), 3)
+	assertEqual(t, len(zResults), 3)
+
+	assertEqual(t, xResults[0].Event, Created)
+	assertEqual(t, xResults[0].Key, foo.Key)
+	assertEqual(t, xResults[1].Event, Updated)
+	assertEqual(t, xResults[2].Event, Deleted)
+
+	assertEqual(t, yResults[0].Event, Created)
+	assertEqual(t, yResults[0].Key, foo.Key)
+	assertEqual(t, yResults[1].Event, Updated)
+	assertEqual(t, yResults[2].Event, Deleted)
+
+	assertEqual(t, zResults[0].Event, Created)
+	assertEqual(t, zResults[0].Key, foo.Key)
+	assertEqual(t, zResults[1].Event, Updated)
+	assertEqual(t, zResults[2].Event, Deleted)
+
 }
 
 func TestMarshal(t *testing.T) {
@@ -894,7 +910,7 @@ func TestMarshal(t *testing.T) {
 	data, err := json.MarshalIndent(srv, "", "  ")
 	failOnErr(t, err)
 
-	newStore := NewServer(Config{Hashing: HashConfig{Enabled: true}})
+	newStore := NewServer(&Config{HashAlgorithm: crypto.MD5})
 	err = json.Unmarshal(data, newStore)
 	failOnErr(t, err)
 
@@ -913,6 +929,40 @@ func TestMarshal(t *testing.T) {
 		assertEqual(t, keyInfo.Size, otherKeyInfo.Size)
 		assertEqual(t, keyInfo.Locked, otherKeyInfo.Locked)
 	}
+}
+
+func TestDump(t *testing.T) {
+	dir := t.TempDir()
+	targetFile := "backup.json"
+	targetPath := filepath.Join(dir, targetFile)
+
+	client := newClient(t)
+	kv := &pb.KeyValue{Key: "foo", Value: []byte("bar")}
+	_, err := client.Set(ctx, kv)
+	failOnErr(t, err)
+
+	err = srv.Dump(targetPath)
+	failOnErr(t, err)
+
+	data, err := os.ReadFile(targetPath)
+	failOnErr(t, err)
+
+	_, err = client.Set(ctx, &pb.KeyValue{Key: "bar", Value: []byte("baz")})
+	failOnErr(t, err)
+
+	ct, err := srv.Restore(data)
+	failOnErr(t, err)
+	assertEqual(t, ct, 1)
+
+	val, err := client.Get(ctx, &pb.Key{Key: "foo"})
+	failOnErr(t, err)
+	assertSlicesEqual(t, val.Value, []byte("bar"))
+
+	_, err = client.Get(ctx, &pb.Key{Key: "bar"})
+	assertNotNil(t, err)
+	e, ok := status.FromError(err)
+	assertEqual(t, ok, true)
+	assertErrorCode(t, e.Code(), codes.NotFound)
 }
 
 func TestMaxValueSize(t *testing.T) {
@@ -1087,9 +1137,9 @@ func assertErrorCode(t *testing.T, code codes.Code, expectedCode codes.Code) {
 	t.Helper()
 	if code != expectedCode {
 		t.Fatalf(
-			"expected:\n%#v\n\ngot:\n%#v",
-			expectedCode,
-			code,
+			"expected:\n%s\n\ngot:\n%s",
+			expectedCode.String(),
+			code.String(),
 		)
 	}
 }

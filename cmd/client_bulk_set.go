@@ -6,6 +6,7 @@ import (
 	pb "github.com/arcward/gokv/api"
 	"github.com/spf13/cobra"
 	"log"
+	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
@@ -27,7 +28,7 @@ var bulkSetCmd = &cobra.Command{
 
 		vals, err := readStdin()
 		if err != nil {
-			log.Fatalf("failed to read stdin: %s", err.Error())
+			printError(fmt.Errorf("failed to read from stdin: %w", err))
 		}
 		opts := &cliOpts
 		cfg := &cliOpts.clientOpts
@@ -37,7 +38,7 @@ var bulkSetCmd = &cobra.Command{
 		expires := uint32(cfg.ExpireKeyIn.Seconds())
 		for _, v := range vals {
 			if ctx.Err() != nil {
-				log.Fatalf("cancelled: %s", ctx.Err().Error())
+				printError(fmt.Errorf("cancelled: %w", ctx.Err()))
 			}
 			key, value, _ := strings.Cut(v, "=")
 			pending = append(
@@ -96,7 +97,11 @@ var bulkSetCmd = &cobra.Command{
 		for result := range doneChannel {
 			fmt.Printf("%s: %+v\n", result.Key, result.Result)
 		}
-		fmt.Printf("processed %d in %f secs\n", len(vals), secs)
+		defaultLogger.Info(
+			"finished processing",
+			slog.Int("processed", len(vals)),
+			slog.Float64("seconds", secs),
+		)
 		return nil
 	},
 }

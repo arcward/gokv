@@ -8,7 +8,7 @@ import (
 )
 
 var listCmd = &cobra.Command{
-	Use:   "list-keys",
+	Use:   "list",
 	Short: "Outputs a list of keys",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
