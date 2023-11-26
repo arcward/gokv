@@ -5,6 +5,7 @@ import (
 	pb "github.com/arcward/gokv/api"
 	"github.com/spf13/cobra"
 	"log"
+	"os"
 )
 
 var getCmd = &cobra.Command{
@@ -18,9 +19,10 @@ var getCmd = &cobra.Command{
 		opts := &cliOpts
 		kv, err := opts.client.Get(ctx, &pb.Key{Key: key})
 		if err != nil {
-			return err
+			fmt.Printf("error getting key: %s\n", err.Error())
+			os.Exit(1)
 		}
-		fmt.Print(string(kv.Value))
+		fmt.Println(string(kv.Value))
 
 		return nil
 	},

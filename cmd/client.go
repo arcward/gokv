@@ -3,6 +3,7 @@ package cmd
 import (
 	"github.com/arcward/gokv/client"
 	"github.com/spf13/cobra"
+	"io"
 	"log"
 	"os"
 )
@@ -17,6 +18,9 @@ var clientCmd = &cobra.Command{
 		cfg := opts.Client
 		cfg.Context = ctx
 		cfg.Address = opts.Address
+		if !opts.Verbose {
+			log.SetOutput(io.Discard)
+		}
 		client := client.NewClient(cfg)
 		opts.client = client
 		err := client.Dial()

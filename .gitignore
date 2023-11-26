@@ -138,3 +138,5 @@ tags
 
 *.key
 *.pem
+
+dist/*

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"crypto"
-	"encoding/json"
 	"fmt"
 	pb "github.com/arcward/gokv/api"
 	"github.com/arcward/gokv/server"
@@ -80,7 +79,10 @@ var serverCmd = &cobra.Command{
 		cliOpts.server = server
 
 		if exists {
-			log.Printf("loading backup file: %s", cliOpts.ServerBackup)
+			logger.Info(
+				"loading existing backup file",
+				slog.String("file", cliOpts.ServerBackup),
+			)
 			serverData, err := os.ReadFile(cliOpts.ServerBackup)
 			if err != nil {
 				log.Fatalf(
@@ -89,7 +91,20 @@ var serverCmd = &cobra.Command{
 					err.Error(),
 				)
 			}
-			err = json.Unmarshal(serverData, &server)
+			err = cliOpts.server.Restore(serverData)
+			if err != nil {
+				logger.Error(
+					"unable to restore server data from file",
+					slog.String("file", cliOpts.ServerBackup),
+					slog.String("error", err.Error()),
+				)
+				os.Exit(1)
+			}
+		} else {
+			logger.Info(
+				"backup file does not exist, starting from scratch",
+				slog.String("file", cliOpts.ServerBackup),
+			)
 		}
 
 		pb.RegisterKeyValueStoreServer(

@@ -18,7 +18,7 @@ build: proto
 	@echo "built ${BINARY_PATH_LINUX}"
 
 clean:
-	-rm -f ${BINARY_PATH_LINUX}
+	-rm -rf ${OUTPUT_DIR}
 
 autocomplete-bash:
 	@mkdir -p ${OUTPUT_DIR}/autocomplete/bash

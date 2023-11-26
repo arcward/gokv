@@ -1220,7 +1220,7 @@ func (s *KeyValueStore) Dump(filename string) error {
 	s.logger.Info(
 		"backing up store", slog.String("bacup_file", filename),
 	)
-	data, err := json.Marshal(s.store)
+	data, err := json.Marshal(s)
 	if err != nil {
 		return fmt.Errorf("unable to marshal json: %w", err)
 	}
