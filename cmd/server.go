@@ -462,18 +462,6 @@ func init() {
 		server.DefaultRevisionLimit,
 		"Maximum size of history. 0=disabled, -1=unlimited",
 	)
-	//serverCmd.Flags().BoolVar(
-	//	&cliOpts.ServerOpts.KeepExpiredKeys,
-	//	"keep-expired-keys",
-	//	false,
-	//	"Do not delete expired keys",
-	//)
-	//serverCmd.Flags().StringVar(
-	//	&cliOpts.ServerOpts.HashAlgorithm,
-	//	"hash-algorithm",
-	//	"",
-	//	"Hash algorithm to use for key hashing",
-	//)
 	snapopts := &cliOpts.ServerOpts.Snapshot
 
 	serverCmd.Flags().StringVar(
@@ -512,7 +500,8 @@ func init() {
 		&snapopts.Encrypt,
 		"encrypt-snapshots",
 		false,
-		"Encrypt snapshots at rest (requires setting KEYQUARRY_SNAPSHOT_SECRET_KEY). If a secret key has been set, this defaults to true",
+		"Encrypt snapshots at rest (requires setting KEYQUARRY_SNAPSHOT_SECRET_KEY). "+
+			"If a secret key has been set, this defaults to true",
 	)
 	serverCmd.Flags().BoolVar(
 		&cliOpts.ServerOpts.Snapshot.Enabled,

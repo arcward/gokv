@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	kclient "github.com/arcward/keyquarry/client"
-	"golang.org/x/exp/rand"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -20,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -106,20 +104,6 @@ func newServer(t *testing.T, lis *bufconn.Listener, cfg *Config) (
 
 	pb.RegisterKeyValueStoreServer(s, srv)
 
-	//go func() {
-	//	select {
-	//	case <-signals:
-	//		//t.Fatalf("%s: interrupted", t.Name())
-	//		panic(fmt.Sprintf("%s: interrupted", t.Name()))
-	//	case <-ctx.Done():
-	//		if e := ctx.Err(); errors.Is(e, context.DeadlineExceeded) {
-	//			//t.Fatalf("%s: timeout exceeded", t.Name())
-	//			panic(fmt.Sprintf("%s: timeout exceeded", t.Name()))
-	//		}
-	//		//case <-ctx.Done():
-	//		//	panic("done called")
-	//	}
-	//}()
 	tctx, tcancel := context.WithTimeout(ctx, testTimeout)
 
 	go func() {
@@ -165,16 +149,6 @@ func newServer(t *testing.T, lis *bufconn.Listener, cfg *Config) (
 func init() {
 	log.SetOutput(io.Discard)
 	fmt.Println("starting stuff")
-	//lis = bufconn.Listen(bufSize)
-
-	//td := os.Getenv("TEST_TIMEOUT")
-	//if td != "" {
-	//	var err error
-	//	testTimeout, err = time.ParseDuration(td)
-	//	if err != nil {
-	//		panic(fmt.Sprintf("failed to parse TEST_TIMEOUT: %s", err.Error()))
-	//	}
-	//}
 
 	ctx, cancel = context.WithCancel(context.Background())
 	go func() {
@@ -184,75 +158,7 @@ func init() {
 			panic("interrupted")
 		}
 	}()
-	//if srv == nil {
-	//	var err error
-	//	vcfg := DefaultConfig()
-	//	vcfg.HashAlgorithm = crypto.MD5
-	//	vcfg.RevisionLimit = 2
-	//	vcfg.MinLifespan = time.Duration(1) * time.Second
-	//	vcfg.MinLockDuration = time.Duration(1) * time.Second
-	//	vcfg.EagerPrune = false
-	//	vcfg.PruneInterval = 0
-	//	srv, err = NewServer(vcfg)
-	//	if err != nil {
-	//		panic(err)
-	//	}
-	//}
-	//
-	//if s == nil {
-	//	s = grpc.NewServer(grpc.UnaryInterceptor(ClientIDInterceptor(srv)))
-	//}
-	//
-	//pb.RegisterKeyValueStoreServer(s, srv)
-	//
-	//
-	//go func() {
-	//	if e := srv.Start(ctx); e != nil {
-	//		panic(e)
-	//	}
-	//}()
-	//go func() {
-	//	if err := s.Serve(lis); err != nil {
-	//		panic(err)
-	//	}
-	//}()
 }
-
-//
-//func newBClient(b *testing.B, srv *KeyValueStore) *kclient.Client {
-//	b.Helper()
-//
-//	//b.Cleanup(
-//	//	func() {
-//	//		srv.mu.Lock()
-//	//		defer srv.mu.Unlock()
-//	//		srv.clear()
-//	//	},
-//	//)
-//
-//	client := kclient.NewClient(
-//		kclient.Config{
-//			NoTLS:   true,
-//			Address: "bufnet",
-//		}, grpc.WithContextDialer(bufDialer),
-//	)
-//	err := client.Dial(true)
-//	if err != nil {
-//		b.Fatalf("Failed to dial bufnet: %v", err)
-//	}
-//
-//	//client := pb.NewKeyValueStoreClient(conn)
-//
-//	go func() {
-//		select {
-//		case <-signals:
-//			panic("interrupted")
-//		case <-ctx.Done():
-//			panic("done called")
-//		}
-//	}()
-//	return client
-//}
 
 func newBadClient(
 	t *testing.T,
@@ -260,7 +166,6 @@ func newBadClient(
 	clientID *string,
 ) pb.KeyValueStoreClient {
 	t.Helper()
-
 	tctx, tcancel := context.WithTimeout(ctx, 30*time.Second)
 
 	dialOpts := []grpc.DialOption{
@@ -295,28 +200,10 @@ func newBadClient(
 		func() {
 			clientConn.Close()
 			tcancel()
-			//srv.mu.Lock()
-			//defer srv.mu.Unlock()
-			//srv.clear()
 		},
 	)
 
 	nc := pb.NewKeyValueStoreClient(clientConn)
-
-	//go func() {
-	//	select {
-	//	case <-signals:
-	//		//t.Fatalf("%s: interrupted", t.Name())
-	//		panic(fmt.Sprintf("%s: interrupted", t.Name()))
-	//	case <-tctx.Done():
-	//		if e := tctx.Err(); errors.Is(e, context.DeadlineExceeded) {
-	//			//t.Fatalf("%s: timeout exceeded", t.Name())
-	//			panic(fmt.Sprintf("%s: timeout exceeded", t.Name()))
-	//		}
-	//	case <-ctx.Done():
-	//		panic("done called")
-	//	}
-	//}()
 	return nc
 }
 
@@ -345,7 +232,6 @@ func newClient(
 	t.Cleanup(
 		func() {
 			tcancel()
-
 		},
 	)
 	if clientID == "" {
@@ -400,72 +286,6 @@ func newClient(
 	}()
 	return client
 }
-
-func benchmarkFailOnErr(b *testing.B, err error) {
-	b.Helper()
-	if err != nil {
-		b.Fatalf("error: %s", err.Error())
-	}
-}
-
-//
-//func BenchmarkKeyValueStore(b *testing.B) {
-//	b.Cleanup(
-//		func() {
-//			srv.clear()
-//			srv.resetStats()
-//		},
-//	)
-//
-//	conn, err := grpc.DialContext(
-//		ctx,
-//		"bufnet",
-//		grpc.WithContextDialer(bufDialer),
-//		grpc.WithInsecure(),
-//	)
-//	if err != nil {
-//		b.Fatalf("Failed to dial bufnet: %v", err)
-//	}
-//
-//	client := pb.NewKeyValueStoreClient(conn)
-//
-//	numKeys := 1000
-//	keys := make([]string, numKeys, numKeys)
-//
-//	d := time.Duration(9) * time.Second
-//	for i := 0; i < numKeys; i++ {
-//		kv := &pb.KeyValue{
-//			Key:      fmt.Sprintf("Key-%d", i),
-//			Value:    []byte(fmt.Sprintf("value-%d", i)),
-//			Lifespan: durationpb.New(d),
-//		}
-//		keys[i] = kv.Key
-//		_, _ = client.Set(
-//			ctx, kv,
-//		)
-//	}
-//
-//	if srv.numKeys.Load() != uint64(numKeys) {
-//		b.Fatalf("expected %d keys, got %d", numKeys, srv.numKeys.Load())
-//	}
-//
-//	time.Sleep(8 * time.Second)
-//	b.ResetTimer()
-//
-//	for i := 0; i < b.N; i++ {
-//		key := fmt.Sprintf("Key-%d", i)
-//		value := []byte(fmt.Sprintf("value-%d", i))
-//		_, err := client.Set(
-//			ctx, &pb.KeyValue{
-//				Key:   key,
-//				Value: value,
-//			},
-//		)
-//		benchmarkFailOnErr(b, err)
-//
-//	}
-//
-//}
 
 func TestListKeys(t *testing.T) {
 	srv, lis := newServer(t, nil, nil)
@@ -682,7 +502,6 @@ func TestMaxKeyLength(t *testing.T) {
 	assertEqual(t, ok, true)
 	assertErrorCode(t, e.Code(), codes.FailedPrecondition)
 	assertEqual(t, e.Message(), ErrKeyTooLong.Message)
-
 }
 
 func TestKeyNotFound(t *testing.T) {
@@ -706,10 +525,8 @@ func TestEagerPrune(t *testing.T) {
 	newCfg.EventStreamSendTimeout = 5 * time.Second
 
 	srv, lis := newServer(t, nil, newCfg)
-
 	client := newClient(t, srv, lis, "")
 
-	//startingKeys := srv.numKeys.Load()
 	resKeys, err := client.ListKeys(
 		ctx,
 		&pb.ListKeysRequest{IncludeReserved: true},
@@ -720,7 +537,6 @@ func TestEagerPrune(t *testing.T) {
 	startingKeys := uint64(len(resKeys.Keys))
 	srv.cfgMu.RLock()
 	maxKeys := srv.cfg.MaxNumberOfKeys
-	//thresholdLimit := uint64(float64(maxKeys) * newCfg.PruneThreshold)
 
 	time.Sleep(5 * time.Second)
 
@@ -733,7 +549,6 @@ func TestEagerPrune(t *testing.T) {
 		keys = append(keys, fmt.Sprintf("key-%d", i+1))
 	}
 	srv.cfgMu.RUnlock()
-	//expectedKeys := keys[capacityRemaining:]
 	watcher, err := srv.Subscribe("foo")
 	fatalOnErr(t, err)
 
@@ -811,22 +626,6 @@ func TestEagerPrune(t *testing.T) {
 		t.Logf("set: %v", kset)
 		afterCt := srv.numKeys.Load()
 
-		//if currentCt > maxKeys {
-		//	t.Fatalf(
-		//		"currentCt: %d, max: %d, ind: %d, key: %s",
-		//		currentCt,
-		//		srv.cfg.MaxNumberOfKeys,
-		//		ind,
-		//		k,
-		//	)
-		//	assertEqual(t, currentCt, thresholdLimit)
-		//	expectedKeys = append(expectedKeys)
-		//	assertErrorCode(
-		//		t,
-		//		status.Code(e),
-		//		codes.ResourceExhausted,
-		//		fmt.Sprintf("#%d, %s (%d)", ind, k, currentCt),
-		//	)
 		if currentCt > maxKeys {
 			t.Fatalf(
 				"exceeded max keys (max: %d current: %d) at %d (%s)",
@@ -888,7 +687,6 @@ func fatalOnErr(t *testing.T, err error, msg ...string) {
 }
 
 func TestKeySort(t *testing.T) {
-
 	fooCreated := time.Now()
 
 	barCreated := fooCreated.Add(time.Duration(-12) * time.Hour)
@@ -925,7 +723,6 @@ func TestKeySort(t *testing.T) {
 			},
 		},
 	}
-
 	sorted := sortKeyValueInfoByDates(keys)
 	assertEqual(t, len(sorted), len(keys))
 	for ind, k := range sorted {
@@ -944,7 +741,6 @@ func TestKeyHistory(t *testing.T) {
 	)
 	var newRevisionLimit int64 = 3
 
-	//srv, lis := newServer(t, nil, nil)
 	client := newClient(t, srv, lis, "")
 	srv.cfgMu.Lock()
 	srv.cfg.RevisionLimit = newRevisionLimit
@@ -1075,7 +871,6 @@ func TestUpdateWithLockDuraton(t *testing.T) {
 	}
 	triggered := keyLock.t.Stop()
 	assertEqual(t, triggered, true)
-
 }
 
 func TestKeyAlreadyLocked(t *testing.T) {
@@ -1232,14 +1027,11 @@ func TestKeyLock(t *testing.T) {
 
 	assertNotEqual(t, keyLock, nil)
 	assertEqual(t, keyLock.Created.IsZero(), false)
-	//assertEqual(t, keyInfo.Created.IsZero(), false)
-
 	for n := time.Now(); n.Before(unlockedAt); n = time.Now() {
 		time.Sleep(1 * time.Second)
 	}
 
 	kx.Value = []byte("baz")
-	//kx.Lock = false
 	kx.LockDuration = nil
 
 	// should be unlocked, able to be updated
@@ -1249,7 +1041,6 @@ func TestKeyLock(t *testing.T) {
 	assertEqual(t, setResponse.Success, true)
 	assertEqual(t, setResponse.IsNew, false)
 	keyInfo.mu.Lock()
-	//assertEqual(t, keyInfo.Locked, false)
 	keyInfo.mu.Unlock()
 	// set the expiration for 1 second, then wait for it to expire
 	_, err = client.Delete(ctx, &pb.DeleteRequest{Key: key})
@@ -1257,13 +1048,11 @@ func TestKeyLock(t *testing.T) {
 
 	dur := time.Duration(10) * time.Second
 	kx.LockDuration = durationpb.New(dur)
-	//kx.Lock = true
 	exp := time.Duration(1) * time.Second
 	kx.Lifespan = durationpb.New(exp)
 	kr, err := client.Set(ctx, kx)
 	failOnErr(t, err)
 	assertEqual(t, kr.Success, true)
-	//unlockToken := kr.UnlockToken
 
 	time.Sleep(3 * time.Second)
 	kvInfo, err = client.GetKeyInfo(ctx, pk)
@@ -1420,7 +1209,6 @@ func TestReadLockedKey(t *testing.T) {
 			assertSlicesEqual(t, val.Value, []byte("bar"))
 		}
 	}
-
 }
 
 func TestKeyValueStore(t *testing.T) {
@@ -1445,7 +1233,6 @@ func TestKeyValueStore(t *testing.T) {
 	failOnErr(t, err)
 	assertEqual(t, kv.IsNew, true)
 	assertEqual(t, srv.numKeys.Load(), 1+startKeyCt)
-	//assertEqual(t, srv.TotalSize(), initialSize)
 
 	// Get the value by Key and validate it matches what we set
 	resp, err := client.Get(ctx, &pb.Key{Key: key})
@@ -1474,7 +1261,6 @@ func TestKeyValueStore(t *testing.T) {
 	failOnErr(t, err)
 	assertEqual(t, kv.IsNew, false)
 	assertEqual(t, srv.numKeys.Load(), 1+startKeyCt)
-	//assertEqual(t, srv.TotalSize(), secondSize)
 
 	// Update should match our new value
 	resp, err = client.Get(ctx, &pb.Key{Key: key})
@@ -1514,14 +1300,11 @@ func TestKeyValueStore(t *testing.T) {
 	failOnErr(t, err)
 
 	assertEqual(t, srv.numKeys.Load(), 2+startKeyCt)
-	//updatedSize := uint64(len(value)) + secondSize
-	//assertEqual(t, srv.TotalSize(), updatedSize)
 
 	dr, err := client.Delete(ctx, &pb.DeleteRequest{Key: secondKey})
 	failOnErr(t, err)
 	assertEqual(t, dr.Deleted, true)
 	assertEqual(t, srv.numKeys.Load(), 1+startKeyCt)
-	//assertEqual(t, srv.TotalSize(), secondSize)
 
 	popResp, err := client.Pop(ctx, &pb.PopRequest{Key: key})
 	failOnErr(t, err)
@@ -1547,7 +1330,6 @@ func TestKeyValueStore(t *testing.T) {
 	stats, err := client.Stats(ctx, &pb.EmptyRequest{})
 	failOnErr(t, err)
 	assertEqual(t, *stats.Keys, startKeyCt)
-	//assertEqual(t, *stats.TotalSize, totalSize)
 }
 
 func TestDetectContentType(t *testing.T) {
@@ -1660,10 +1442,6 @@ func TestEvents(t *testing.T) {
 
 	wg := &sync.WaitGroup{}
 
-	//xDone := make(chan struct{})
-	//yDone := make(chan struct{})
-	//zDone := make(chan struct{})
-
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -1677,8 +1455,6 @@ func TestEvents(t *testing.T) {
 
 			if len(xResults) == 3 {
 				t.Log("waiting to unsubscribe x")
-				//ue := srv.Unsubscribe("x")
-				//failOnErr(t, ue)
 				break
 			}
 			if ctx.Err() != nil {
@@ -1701,8 +1477,6 @@ func TestEvents(t *testing.T) {
 			yResults = append(yResults, xv)
 			if len(yResults) == 3 {
 				t.Log("waiting to unsubscribe y")
-				//ue := srv.Unsubscribe("y")
-				//failOnErr(t, ue)
 				break
 			}
 			if ctx.Err() != nil {
@@ -1728,8 +1502,6 @@ func TestEvents(t *testing.T) {
 
 			if len(zResults) == 3 {
 				t.Log("waiting to unsubscribe z")
-				//ue := srv.Unsubscribe("z")
-				//failOnErr(t, ue)
 				break
 			}
 			if ctx.Err() != nil {
@@ -1756,8 +1528,6 @@ func TestEvents(t *testing.T) {
 	if ctx.Err() != nil {
 		t.Fatalf("context cancelled: %s", ctx.Err().Error())
 	}
-
-	//wg.Wait()
 
 	t.Logf("x: %#v", xResults)
 	t.Logf("y: %#v", yResults)
@@ -1943,7 +1713,6 @@ func TestMarshal(t *testing.T) {
 		assertSlicesEqual(t, keyInfo.Value, otherKeyInfo.Value)
 		assertEqual(t, keyInfo.Hash, otherKeyInfo.Hash)
 		assertEqual(t, keyInfo.Size, otherKeyInfo.Size)
-		//assertEqual(t, keyInfo.Locked, otherKeyInfo.Locked)
 		firstLock, locked := srv.locks[keyName]
 		otherLock, otherLocked := newStore.locks[keyName]
 		assertEqual(
@@ -2046,28 +1815,6 @@ func assertEqual[V comparable](t *testing.T, val V, expected V, msg ...string) {
 			val,
 			strings.Join(msg, "\n"),
 		)
-	}
-}
-
-func assertGreaterOrEqual[V ~int | ~float64 | ~uint | ~int64](
-	t *testing.T,
-	val V,
-	threshold V,
-) {
-	t.Helper()
-	if val < threshold {
-		t.Errorf("expected >=%v, got %v", threshold, val)
-	}
-}
-
-func assertGreaterThan[V ~int | ~float64 | ~uint | ~int64](
-	t *testing.T,
-	val V,
-	target V,
-) {
-	t.Helper()
-	if val <= target {
-		t.Errorf("expected >%v, got %v", target, val)
 	}
 }
 
@@ -2210,74 +1957,3 @@ func assertNotNil(t *testing.T, v any) {
 
 	}
 }
-
-//
-//func BenchmarkSetKey(b *testing.B) {
-//	client := newBClient(b)
-//	srv.cfg.HashAlgorithm = crypto.MD5
-//	log.SetOutput(io.Discard)
-//	b.ResetTimer()
-//	//ct := 0
-//	b.N = 500
-//	for i := 0; i < b.N; i++ {
-//		//ct++
-//		_, err := client.Set(
-//			ctx,
-//			&pb.KeyValue{Key: "foo", Value: []byte(fmt.Sprintf("%d", i))},
-//		)
-//		if err != nil {
-//			b.Fatalf("failed on %d: %s", i, err.Error())
-//		}
-//		//if i > 0 && (r.IsNew || !r.Success) {
-//		//	b.Fatalf("expected not new, got: %#v", r)
-//		//}
-//	}
-//
-//	//b.Logf("final count: %d", ct)
-//	//
-//	//finalVal, _ := client.Get(ctx, &pb.Key{Key: "foo"})
-//	//b.Logf("final value: %s", string(finalVal.Value))
-//	//
-//	//info, err := client.GetKeyInfo(ctx, &pb.Key{Key: "foo"})
-//	//if err != nil {
-//	//	b.Fatalf("%s", err.Error())
-//	//}
-//	//b.Logf("info: %#v", info.Version)
-//	//if info.Version != 10 {
-//	//	b.Fatalf("expected version 10, got: %d", info.Version)
-//	//}
-//	//b.RunParallel(func(pb *testing.PB) {
-//	//	var
-//	//})
-//}
-
-func getKV() *pb.KeyValue {
-	return &pb.KeyValue{
-		Key:   "foo",
-		Value: []byte(strconv.Itoa(rand.Intn(5000))),
-	}
-}
-
-//func BenchmarkSetKeyP(b *testing.B) {
-//	client := newBClient(b)
-//	srv.cfg.HashAlgorithm = crypto.MD5
-//	b.N = 2
-//
-//	b.Logf("procs: %d", runtime.GOMAXPROCS(0))
-//	log.SetOutput(io.Discard)
-//	//b.ResetTimer()
-//	//ct := 0
-//
-//	b.RunParallel(
-//		func(pb *testing.PB) {
-//			ukv := getKV()
-//			for pb.Next() {
-//				_, err := client.Set(ctx, ukv)
-//				if err != nil {
-//					b.Fatalf("failed %s", err.Error())
-//				}
-//			}
-//		},
-//	)
-//
-//}

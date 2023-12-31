@@ -448,7 +448,6 @@ func initConfig() {
 		),
 	)
 	viper.SetDefault("snapshot.limit", server.DefaultSnapshotLimit)
-
 	viper.SetDefault("snapshot.secret_key", "")
 
 	cobra.CheckErr(

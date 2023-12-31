@@ -110,7 +110,6 @@ func newServer(
 		ClientOpts: kc.DefaultConfig(),
 	}
 	*opts = *newOpts
-	//opts = &CLIConfig{}
 
 	var srv *server.KeyValueStore
 	var gServer *grpc.Server
@@ -292,8 +291,6 @@ func captureOutput(t *testing.T, f func()) string {
 }
 
 func init() {
-	//log.SetOutput(io.Discard)
-
 	td := os.Getenv("TEST_TIMEOUT")
 	if td != "" {
 		var err error
@@ -640,7 +637,6 @@ func TestServerCmd(t *testing.T) {
 				t.Fatalf("error globbing snapshots: %s", se.Error())
 			}
 			if len(snapshots) == 0 {
-				//sscancel()
 				continue
 			}
 
@@ -650,7 +646,6 @@ func TestServerCmd(t *testing.T) {
 				firstSnapshot := string(snapshotsByNum[0])
 				_, ssErr := os.Stat(firstSnapshot)
 				if ssErr == nil || !os.IsNotExist(ssErr) {
-					//sscancel()
 					t.Fatalf(
 						"expected first snapshot to be deleted, still exists: %s",
 						firstSnapshot,
@@ -660,7 +655,6 @@ func TestServerCmd(t *testing.T) {
 				// snapshot limit, in addition to the oldest snapshot
 				// having been deleted
 				if len(snapshots) > snapshotLimit {
-					//sscancel()
 					t.Fatalf(
 						"expected %d snapshots, got %d",
 						snapshotLimit,
@@ -674,7 +668,6 @@ func TestServerCmd(t *testing.T) {
 			for _, sf := range snapshots {
 				if ssctx.Err() != nil {
 					if errors.Is(ssctx.Err(), context.DeadlineExceeded) {
-						//sscancel()
 						t.Fatalf("timeout waiting for snapshot %d", i)
 					} else {
 						t.Logf("breaking out of snapshot on loop %d", i)
@@ -691,9 +684,6 @@ func TestServerCmd(t *testing.T) {
 						sfilename,
 					)
 					snapdata, serr := server.ReadSnapshot(sf, secretKey)
-					//if serr != nil {
-					//	sscancel()
-					//}
 					fatalOnErr(t, serr)
 					for _, snapKey := range snapdata.Keys {
 						if snapKey.Key == kv.Key {
@@ -708,7 +698,6 @@ func TestServerCmd(t *testing.T) {
 					}
 					_, foundKey := snapshotsByNum[i]
 					if !foundKey {
-						//sscancel()
 						t.Fatalf(
 							"unable to find key %s in snapshot %s",
 							kv.Key,
@@ -1096,7 +1085,6 @@ func TestDeleteCmd(t *testing.T) {
 }
 
 func TestGetKeyInfoCmd(t *testing.T) {
-
 	addr := socketAddr(t)
 	_ = newServer(t, nil, addr)
 	client := newClient(t, nil, addr)
