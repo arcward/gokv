@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	pb "github.com/arcward/gokv/api"
+	pb "github.com/arcward/keyquarry/api"
 	"github.com/spf13/cobra"
 )
 

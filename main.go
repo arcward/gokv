@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"github.com/arcward/gokv/cmd"
+	"github.com/arcward/keyquarry/cmd"
 	"log"
 	"os"
 	"os/signal"

@@ -1,8 +1,9 @@
 package cmd
 
 import (
-	pb "github.com/arcward/gokv/api"
+	pb "github.com/arcward/keyquarry/api"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"strings"
 )
 
@@ -25,15 +26,19 @@ var setCmd = &cobra.Command{
 			value = []byte(strings.Join(val, "\n"))
 		}
 		opts := &cliOpts
+		req := &pb.KeyValue{
+			Key:   key,
+			Value: value,
+		}
+		if opts.clientOpts.LockTimeout > 0 {
+			req.LockDuration = durationpb.New(opts.clientOpts.LockTimeout)
+		}
+		if opts.clientOpts.KeyLifespan.Seconds() > 0 {
+			req.Lifespan = durationpb.New(opts.clientOpts.KeyLifespan)
+		}
 		kv, err := opts.client.Set(
 			ctx,
-			&pb.KeyValue{
-				Key:          key,
-				Value:        value,
-				ExpireIn:     uint32(opts.clientOpts.ExpireKeyIn.Seconds()),
-				Lock:         opts.clientOpts.Lock,
-				LockDuration: uint32(opts.clientOpts.LockTimeout.Seconds()),
-			},
+			req,
 		)
 		printError(err)
 		printResult(kv)
@@ -43,21 +48,15 @@ var setCmd = &cobra.Command{
 func init() {
 	clientCmd.AddCommand(setCmd)
 	setCmd.Flags().DurationVar(
-		&cliOpts.clientOpts.ExpireKeyIn,
-		"expires",
+		&cliOpts.clientOpts.KeyLifespan,
+		"lifespan",
 		0,
 		"Expire key in specified duration (e.g. 1h30m)",
 	)
-	setCmd.Flags().BoolVar(
-		&cliOpts.clientOpts.Lock,
-		"lock",
-		false,
-		"Lock the key",
-	)
 	setCmd.Flags().DurationVar(
 		&cliOpts.clientOpts.LockTimeout,
-		"lock-timeout",
+		"lock",
 		0,
-		"Lock timeout",
+		"Lock key for specified duration (e.g. 1h30m)",
 	)
 }

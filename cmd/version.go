@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/arcward/gokv/build"
+	"github.com/arcward/keyquarry/build"
 	"github.com/spf13/cobra"
 )
 
@@ -11,7 +11,7 @@ var versionCmd = &cobra.Command{
 	Short: "Display version information",
 	Run: func(cmd *cobra.Command, args []string) {
 		opts := &cliOpts
-		fmt.Println("gokv version:", build.Version)
+		fmt.Println("keyquarry version:", build.Version)
 		if opts.ShowDetailedVersion {
 			fmt.Println("git commit:", build.Commit)
 			fmt.Println("build time:", build.Time)

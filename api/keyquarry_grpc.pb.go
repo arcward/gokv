@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.2.0
 // - protoc             v3.21.12
-// source: api/gokv.proto
+// source: api/keyquarry.proto
 
 package api
 
@@ -37,14 +37,14 @@ type KeyValueStoreClient interface {
 	// Delete deletes a key. If the key does not exist, an error
 	// will be returned. If the key is locked, an error will
 	// be returned.
-	Delete(ctx context.Context, in *Key, opts ...grpc.CallOption) (*DeleteResponse, error)
+	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
 	// Exists indicates whether a key exists.
 	Exists(ctx context.Context, in *Key, opts ...grpc.CallOption) (*ExistsResponse, error)
 	// Pop returns the value of a key and deletes it. If the key
 	// is locked or doesn't exist, an error will be returned.
-	Pop(ctx context.Context, in *Key, opts ...grpc.CallOption) (*GetResponse, error)
+	Pop(ctx context.Context, in *PopRequest, opts ...grpc.CallOption) (*GetResponse, error)
 	// Clear deletes all unlocked keys from the store.
-	Clear(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ClearResponse, error)
+	Clear(ctx context.Context, in *ClearRequest, opts ...grpc.CallOption) (*ClearResponse, error)
 	// ListKeys returns a list of keys matching a pattern.
 	ListKeys(ctx context.Context, in *ListKeysRequest, opts ...grpc.CallOption) (*ListKeysResponse, error)
 	// Stats returns statistics about the store.
@@ -60,6 +60,8 @@ type KeyValueStoreClient interface {
 	// GetRevision gets the value of a key at a specific revision, with
 	// its timestamp
 	GetRevision(ctx context.Context, in *GetRevisionRequest, opts ...grpc.CallOption) (*RevisionResponse, error)
+	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
+	SetReadOnly(ctx context.Context, in *ReadOnlyRequest, opts ...grpc.CallOption) (*ReadOnlyResponse, error)
 }
 
 type keyValueStoreClient struct {
@@ -72,7 +74,7 @@ func NewKeyValueStoreClient(cc grpc.ClientConnInterface) KeyValueStoreClient {
 
 func (c *keyValueStoreClient) Set(ctx context.Context, in *KeyValue, opts ...grpc.CallOption) (*SetResponse, error) {
 	out := new(SetResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/Set", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Set", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +83,7 @@ func (c *keyValueStoreClient) Set(ctx context.Context, in *KeyValue, opts ...grp
 
 func (c *keyValueStoreClient) Get(ctx context.Context, in *Key, opts ...grpc.CallOption) (*GetResponse, error) {
 	out := new(GetResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/Get", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Get", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -90,16 +92,16 @@ func (c *keyValueStoreClient) Get(ctx context.Context, in *Key, opts ...grpc.Cal
 
 func (c *keyValueStoreClient) GetKeyInfo(ctx context.Context, in *Key, opts ...grpc.CallOption) (*GetKeyValueInfoResponse, error) {
 	out := new(GetKeyValueInfoResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/GetKeyInfo", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/GetKeyInfo", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Delete(ctx context.Context, in *Key, opts ...grpc.CallOption) (*DeleteResponse, error) {
+func (c *keyValueStoreClient) Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error) {
 	out := new(DeleteResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/Delete", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Delete", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -108,25 +110,25 @@ func (c *keyValueStoreClient) Delete(ctx context.Context, in *Key, opts ...grpc.
 
 func (c *keyValueStoreClient) Exists(ctx context.Context, in *Key, opts ...grpc.CallOption) (*ExistsResponse, error) {
 	out := new(ExistsResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/Exists", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Exists", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Pop(ctx context.Context, in *Key, opts ...grpc.CallOption) (*GetResponse, error) {
+func (c *keyValueStoreClient) Pop(ctx context.Context, in *PopRequest, opts ...grpc.CallOption) (*GetResponse, error) {
 	out := new(GetResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/Pop", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Pop", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Clear(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ClearResponse, error) {
+func (c *keyValueStoreClient) Clear(ctx context.Context, in *ClearRequest, opts ...grpc.CallOption) (*ClearResponse, error) {
 	out := new(ClearResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/Clear", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Clear", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +137,7 @@ func (c *keyValueStoreClient) Clear(ctx context.Context, in *EmptyRequest, opts 
 
 func (c *keyValueStoreClient) ListKeys(ctx context.Context, in *ListKeysRequest, opts ...grpc.CallOption) (*ListKeysResponse, error) {
 	out := new(ListKeysResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/ListKeys", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/ListKeys", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +146,7 @@ func (c *keyValueStoreClient) ListKeys(ctx context.Context, in *ListKeysRequest,
 
 func (c *keyValueStoreClient) Stats(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ServerMetrics, error) {
 	out := new(ServerMetrics)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/Stats", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Stats", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +155,7 @@ func (c *keyValueStoreClient) Stats(ctx context.Context, in *EmptyRequest, opts 
 
 func (c *keyValueStoreClient) ClearHistory(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ClearHistoryResponse, error) {
 	out := new(ClearHistoryResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/ClearHistory", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/ClearHistory", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +164,7 @@ func (c *keyValueStoreClient) ClearHistory(ctx context.Context, in *EmptyRequest
 
 func (c *keyValueStoreClient) Lock(ctx context.Context, in *LockRequest, opts ...grpc.CallOption) (*LockResponse, error) {
 	out := new(LockResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/Lock", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Lock", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +173,7 @@ func (c *keyValueStoreClient) Lock(ctx context.Context, in *LockRequest, opts ..
 
 func (c *keyValueStoreClient) Unlock(ctx context.Context, in *UnlockRequest, opts ...grpc.CallOption) (*UnlockResponse, error) {
 	out := new(UnlockResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/Unlock", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Unlock", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +182,25 @@ func (c *keyValueStoreClient) Unlock(ctx context.Context, in *UnlockRequest, opt
 
 func (c *keyValueStoreClient) GetRevision(ctx context.Context, in *GetRevisionRequest, opts ...grpc.CallOption) (*RevisionResponse, error) {
 	out := new(RevisionResponse)
-	err := c.cc.Invoke(ctx, "/gokv.KeyValueStore/GetRevision", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/GetRevision", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keyValueStoreClient) Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error) {
+	out := new(RegisterResponse)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Register", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keyValueStoreClient) SetReadOnly(ctx context.Context, in *ReadOnlyRequest, opts ...grpc.CallOption) (*ReadOnlyResponse, error) {
+	out := new(ReadOnlyResponse)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/SetReadOnly", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -206,14 +226,14 @@ type KeyValueStoreServer interface {
 	// Delete deletes a key. If the key does not exist, an error
 	// will be returned. If the key is locked, an error will
 	// be returned.
-	Delete(context.Context, *Key) (*DeleteResponse, error)
+	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
 	// Exists indicates whether a key exists.
 	Exists(context.Context, *Key) (*ExistsResponse, error)
 	// Pop returns the value of a key and deletes it. If the key
 	// is locked or doesn't exist, an error will be returned.
-	Pop(context.Context, *Key) (*GetResponse, error)
+	Pop(context.Context, *PopRequest) (*GetResponse, error)
 	// Clear deletes all unlocked keys from the store.
-	Clear(context.Context, *EmptyRequest) (*ClearResponse, error)
+	Clear(context.Context, *ClearRequest) (*ClearResponse, error)
 	// ListKeys returns a list of keys matching a pattern.
 	ListKeys(context.Context, *ListKeysRequest) (*ListKeysResponse, error)
 	// Stats returns statistics about the store.
@@ -229,6 +249,8 @@ type KeyValueStoreServer interface {
 	// GetRevision gets the value of a key at a specific revision, with
 	// its timestamp
 	GetRevision(context.Context, *GetRevisionRequest) (*RevisionResponse, error)
+	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
+	SetReadOnly(context.Context, *ReadOnlyRequest) (*ReadOnlyResponse, error)
 	mustEmbedUnimplementedKeyValueStoreServer()
 }
 
@@ -245,16 +267,16 @@ func (UnimplementedKeyValueStoreServer) Get(context.Context, *Key) (*GetResponse
 func (UnimplementedKeyValueStoreServer) GetKeyInfo(context.Context, *Key) (*GetKeyValueInfoResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetKeyInfo not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Delete(context.Context, *Key) (*DeleteResponse, error) {
+func (UnimplementedKeyValueStoreServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
 func (UnimplementedKeyValueStoreServer) Exists(context.Context, *Key) (*ExistsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Exists not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Pop(context.Context, *Key) (*GetResponse, error) {
+func (UnimplementedKeyValueStoreServer) Pop(context.Context, *PopRequest) (*GetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Pop not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Clear(context.Context, *EmptyRequest) (*ClearResponse, error) {
+func (UnimplementedKeyValueStoreServer) Clear(context.Context, *ClearRequest) (*ClearResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Clear not implemented")
 }
 func (UnimplementedKeyValueStoreServer) ListKeys(context.Context, *ListKeysRequest) (*ListKeysResponse, error) {
@@ -274,6 +296,12 @@ func (UnimplementedKeyValueStoreServer) Unlock(context.Context, *UnlockRequest) 
 }
 func (UnimplementedKeyValueStoreServer) GetRevision(context.Context, *GetRevisionRequest) (*RevisionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRevision not implemented")
+}
+func (UnimplementedKeyValueStoreServer) Register(context.Context, *RegisterRequest) (*RegisterResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Register not implemented")
+}
+func (UnimplementedKeyValueStoreServer) SetReadOnly(context.Context, *ReadOnlyRequest) (*ReadOnlyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetReadOnly not implemented")
 }
 func (UnimplementedKeyValueStoreServer) mustEmbedUnimplementedKeyValueStoreServer() {}
 
@@ -298,7 +326,7 @@ func _KeyValueStore_Set_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/Set",
+		FullMethod: "/keyquarry.KeyValueStore/Set",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(KeyValueStoreServer).Set(ctx, req.(*KeyValue))
@@ -316,7 +344,7 @@ func _KeyValueStore_Get_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/Get",
+		FullMethod: "/keyquarry.KeyValueStore/Get",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(KeyValueStoreServer).Get(ctx, req.(*Key))
@@ -334,7 +362,7 @@ func _KeyValueStore_GetKeyInfo_Handler(srv interface{}, ctx context.Context, dec
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/GetKeyInfo",
+		FullMethod: "/keyquarry.KeyValueStore/GetKeyInfo",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(KeyValueStoreServer).GetKeyInfo(ctx, req.(*Key))
@@ -343,7 +371,7 @@ func _KeyValueStore_GetKeyInfo_Handler(srv interface{}, ctx context.Context, dec
 }
 
 func _KeyValueStore_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Key)
+	in := new(DeleteRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -352,10 +380,10 @@ func _KeyValueStore_Delete_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/Delete",
+		FullMethod: "/keyquarry.KeyValueStore/Delete",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Delete(ctx, req.(*Key))
+		return srv.(KeyValueStoreServer).Delete(ctx, req.(*DeleteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -370,7 +398,7 @@ func _KeyValueStore_Exists_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/Exists",
+		FullMethod: "/keyquarry.KeyValueStore/Exists",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(KeyValueStoreServer).Exists(ctx, req.(*Key))
@@ -379,7 +407,7 @@ func _KeyValueStore_Exists_Handler(srv interface{}, ctx context.Context, dec fun
 }
 
 func _KeyValueStore_Pop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Key)
+	in := new(PopRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -388,16 +416,16 @@ func _KeyValueStore_Pop_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/Pop",
+		FullMethod: "/keyquarry.KeyValueStore/Pop",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Pop(ctx, req.(*Key))
+		return srv.(KeyValueStoreServer).Pop(ctx, req.(*PopRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _KeyValueStore_Clear_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(EmptyRequest)
+	in := new(ClearRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -406,10 +434,10 @@ func _KeyValueStore_Clear_Handler(srv interface{}, ctx context.Context, dec func
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/Clear",
+		FullMethod: "/keyquarry.KeyValueStore/Clear",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Clear(ctx, req.(*EmptyRequest))
+		return srv.(KeyValueStoreServer).Clear(ctx, req.(*ClearRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -424,7 +452,7 @@ func _KeyValueStore_ListKeys_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/ListKeys",
+		FullMethod: "/keyquarry.KeyValueStore/ListKeys",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(KeyValueStoreServer).ListKeys(ctx, req.(*ListKeysRequest))
@@ -442,7 +470,7 @@ func _KeyValueStore_Stats_Handler(srv interface{}, ctx context.Context, dec func
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/Stats",
+		FullMethod: "/keyquarry.KeyValueStore/Stats",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(KeyValueStoreServer).Stats(ctx, req.(*EmptyRequest))
@@ -460,7 +488,7 @@ func _KeyValueStore_ClearHistory_Handler(srv interface{}, ctx context.Context, d
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/ClearHistory",
+		FullMethod: "/keyquarry.KeyValueStore/ClearHistory",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(KeyValueStoreServer).ClearHistory(ctx, req.(*EmptyRequest))
@@ -478,7 +506,7 @@ func _KeyValueStore_Lock_Handler(srv interface{}, ctx context.Context, dec func(
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/Lock",
+		FullMethod: "/keyquarry.KeyValueStore/Lock",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(KeyValueStoreServer).Lock(ctx, req.(*LockRequest))
@@ -496,7 +524,7 @@ func _KeyValueStore_Unlock_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/Unlock",
+		FullMethod: "/keyquarry.KeyValueStore/Unlock",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(KeyValueStoreServer).Unlock(ctx, req.(*UnlockRequest))
@@ -514,10 +542,46 @@ func _KeyValueStore_GetRevision_Handler(srv interface{}, ctx context.Context, de
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/gokv.KeyValueStore/GetRevision",
+		FullMethod: "/keyquarry.KeyValueStore/GetRevision",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(KeyValueStoreServer).GetRevision(ctx, req.(*GetRevisionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeyValueStore_Register_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeyValueStoreServer).Register(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/keyquarry.KeyValueStore/Register",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeyValueStoreServer).Register(ctx, req.(*RegisterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeyValueStore_SetReadOnly_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadOnlyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeyValueStoreServer).SetReadOnly(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/keyquarry.KeyValueStore/SetReadOnly",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeyValueStoreServer).SetReadOnly(ctx, req.(*ReadOnlyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -526,7 +590,7 @@ func _KeyValueStore_GetRevision_Handler(srv interface{}, ctx context.Context, de
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var KeyValueStore_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "gokv.KeyValueStore",
+	ServiceName: "keyquarry.KeyValueStore",
 	HandlerType: (*KeyValueStoreServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -581,7 +645,15 @@ var KeyValueStore_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "GetRevision",
 			Handler:    _KeyValueStore_GetRevision_Handler,
 		},
+		{
+			MethodName: "Register",
+			Handler:    _KeyValueStore_Register_Handler,
+		},
+		{
+			MethodName: "SetReadOnly",
+			Handler:    _KeyValueStore_SetReadOnly_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "api/gokv.proto",
+	Metadata: "api/keyquarry.proto",
 }

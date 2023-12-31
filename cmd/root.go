@@ -4,18 +4,23 @@ import (
 	"bufio"
 	"context"
 	"crypto"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/arcward/gokv/client"
-	"github.com/arcward/gokv/server"
-	"github.com/golang/protobuf/jsonpb"
-	"github.com/golang/protobuf/proto"
+	"github.com/arcward/keyquarry/client"
+	"github.com/arcward/keyquarry/server"
+	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -26,6 +31,8 @@ const (
 	defaultPort    = 33969
 )
 
+var out io.Writer = os.Stdout
+
 var defaultAddress = fmt.Sprintf(
 	"%s:%d",
 	defaultHost,
@@ -33,27 +40,68 @@ var defaultAddress = fmt.Sprintf(
 )
 
 type CLIConfig struct {
-	Address             string              `json:"address" yaml:"address" mapstructure:"address"`
-	Verbose             bool                `json:"verbose" yaml:"verbose" mapstructure:"verbose"`
-	Server              server.Config       `json:"server" yaml:"server" mapstructure:"server"`
-	SSLKeyfile          string              `json:"ssl_keyfile" yaml:"ssl_keyfile" mapstructure:"ssl_keyfile"`
-	SSLCertfile         string              `json:"ssl_certfile" yaml:"ssl_certfile" mapstructure:"ssl_certfile"`
-	Client              client.ClientConfig // `json:"client" yaml:"client" mapstructure:"client"`
+	ServerOpts server.Config `json:"server" yaml:"server" mapstructure:"server"`
+
+	ClientOpts client.Config //`json:"client" yaml:"client" mapstructure:"client"`
+
 	configFile          string
 	clientOpts          clientOptions
 	server              *server.KeyValueStore
 	grpcServer          *grpc.Server
 	client              *client.Client
-	LogLevel            logLevelFlag `json:"log_level" yaml:"log_level"`
-	LogJSON             bool         `json:"log_json" yaml:"log_json"`
-	hashAlgorithm       hashFlag
-	Quiet               bool
-	IndentJSON          int
-	LoadSnapshot        string
-	SnapshotDir         string
-	SnapshotInterval    time.Duration
-	SnapshotLimit       int
+	LogLevel            string `json:"log_level" yaml:"log_level" mapstructure:"log_level"`
+	LogJSON             bool   `json:"log_json" yaml:"log_json" mapstructure:"log_json"`
 	ShowDetailedVersion bool
+	ProfileCPU          bool
+}
+
+func decodeHashType() mapstructure.DecodeHookFuncType {
+	// Wrapped in a function call to add optional input parameters (eg. separator)
+	return func(
+		f reflect.Type, // data type
+		t reflect.Type, // target data type
+		data interface{}, // raw data
+	) (interface{}, error) {
+		// Check if the data type matches the expected one
+
+		if f.Kind() != reflect.String {
+			return data, nil
+		}
+
+		// Check if the target type matches the expected one
+		if t != reflect.TypeOf(crypto.Hash(0)) {
+			return data, nil
+		}
+
+		// Format/decode/parse the data and return the new value
+		hashes := []crypto.Hash{
+			crypto.MD4,
+			crypto.MD5,
+			crypto.SHA1,
+			crypto.SHA224,
+			crypto.SHA256,
+			crypto.SHA384,
+			crypto.SHA512,
+			crypto.MD5SHA1,
+			crypto.RIPEMD160,
+			crypto.SHA3_224,
+			crypto.SHA3_256,
+			crypto.SHA3_384,
+			crypto.SHA3_512,
+			crypto.SHA512_224,
+			crypto.SHA512_256,
+			crypto.BLAKE2s_256,
+			crypto.BLAKE2b_256,
+			crypto.BLAKE2b_384,
+			crypto.BLAKE2b_512,
+		}
+		for _, h := range hashes {
+			if strings.ToUpper(data.(string)) == h.String() {
+				return h, nil
+			}
+		}
+		return crypto.Hash(0), nil
+	}
 }
 
 type hashFlag struct {
@@ -68,7 +116,7 @@ func (f *hashFlag) Set(s string) error {
 	s = strings.ToUpper(s)
 	val := f.getHash(s)
 	available := []string{}
-	for _, hash := range f.availableHashes() {
+	for _, hash := range availableHashes() {
 		available = append(available, hash.String())
 	}
 
@@ -90,7 +138,7 @@ func (f *hashFlag) Set(s string) error {
 	return nil
 }
 
-func (f *hashFlag) availableHashes() []crypto.Hash {
+func availableHashes() []crypto.Hash {
 	hashes := []crypto.Hash{
 		crypto.MD4,
 		crypto.MD5,
@@ -170,62 +218,51 @@ func (f hashFlag) Type() string {
 	return "crypto.Hash"
 }
 
-type logLevelFlag struct {
-	Value slog.Level
-}
-
-func (f *logLevelFlag) String() string {
-	return f.Value.String()
-}
-
-func (f logLevelFlag) Level() slog.Level {
-	return f.Value
-}
-
-func (f *logLevelFlag) Set(s string) error {
-	s = strings.ToUpper(s)
-	levels := []slog.Level{
-		slog.LevelInfo,
-		slog.LevelDebug,
-		slog.LevelWarn,
-		slog.LevelError,
+func getLogLevel(levelName string) (slog.Level, bool) {
+	levelName = strings.ToUpper(levelName)
+	switch levelName {
+	case slog.LevelDebug.String():
+		return slog.LevelDebug, true
+	case slog.LevelInfo.String():
+		return slog.LevelInfo, true
+	case slog.LevelWarn.String():
+		return slog.LevelWarn, true
+	case slog.LevelError.String():
+		return slog.LevelError, true
+	case "EVENT":
+		return server.LevelEvent, true
+	default:
+		return slog.LevelInfo, false
 	}
-	for _, level := range levels {
-		if s == level.String() {
-			f.Value = level
-			return nil
-		}
-	}
-	return fmt.Errorf(
-		"invalid log level '%s' (expected one of: %s %s %s %s)",
-		s,
-		levels[0],
-		levels[1],
-		levels[2],
-		levels[3],
-	)
-}
-
-func (f logLevelFlag) Type() string {
-	return "log_level"
 }
 
 type clientOptions struct {
-	ExpireKeyIn time.Duration
-	Lock        bool
-	LockTimeout time.Duration
-	ListKeyOpts struct {
-		Pattern string
-		Limit   uint64
+	KeyLifespan         time.Duration
+	LockTimeout         time.Duration
+	LockCreateIfMissing bool
+	ListKeyOpts         struct {
+		Pattern         string
+		Limit           uint64
+		IncludeReserved bool
 	}
+	GetKeyVersion uint64
+
+	Verbose     bool   `json:"verbose" yaml:"verbose" mapstructure:"verbose"`
+	SSLKeyfile  string `json:"ssl_keyfile" yaml:"ssl_keyfile" mapstructure:"ssl_keyfile"`
+	SSLCertfile string `json:"ssl_certfile" yaml:"ssl_certfile" mapstructure:"ssl_certfile"`
+	Quiet       bool
+	IndentJSON  int
 }
 
-var cliOpts CLIConfig
-var defaultLogger = slog.Default().WithGroup("gokv")
+var cliOpts CLIConfig = CLIConfig{
+	ServerOpts: *server.DefaultConfig(),
+	ClientOpts: client.DefaultConfig(),
+}
+var defaultLogger = slog.Default().With("logger", "cli")
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "gokv",
+	Use:   "keyquarry",
 	Short: "Key-value store client/server with gRPC",
 	Long:  ``,
 }
@@ -233,70 +270,14 @@ var rootCmd = &cobra.Command{
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute(ctx context.Context) {
-	//ctx, cancel := context.WithCancel(context.Background())
-	//signals := make(chan os.Signal, 1)
-	//wg := &sync.WaitGroup{}
-	//signal.Notify(
-	//	signals,
-	//	os.Interrupt,
-	//	syscall.SIGHUP,
-	//	syscall.SIGTERM,
-	//	syscall.SIGINT,
-	//)
 
-	//defer func() {
-	//	signal.Stop(signals)
-	//	cancel()
-	//}()
-	//go func() {
-	//	defer func() {
-	//		fmt.Println("done")
-	//	}()
-	//	select {
-	//	case <-ctx.Done():
-	//		// only wait for the server to stop if it's running
-	//		// this avoids blocking the client
-	//		wg.Add(1)
-	//		defer wg.Done()
-	//		fmt.Println("called cancel")
-	//		if cliOpts.grpcServer != nil {
-	//			fmt.Println("graceful stop")
-	//			cliOpts.grpcServer.GracefulStop()
-	//		}
-	//		opts := &cliOpts
-	//		opts.server.Stop()
-	//		//case <-signals:
-	//		//	cancel()
-	//	}
-	//}()
-
-	//go func() {
-	//	defer func() {
-	//		fmt.Println("done")
-	//	}()
-	//	select {
-	//	case <-ctx.Done():
-	//		fmt.Println("finished")
-	//	case <-signals:
-	//		// only wait for the server to stop if it's running
-	//		// this avoids blocking the client
-	//		wg.Add(1)
-	//		defer wg.Done()
-	//		cancel()
-	//		fmt.Println("called cancel")
-	//		if cliOpts.grpcServer != nil {
-	//			fmt.Println("graceful stop")
-	//			cliOpts.grpcServer.GracefulStop()
-	//		}
-	//		opts := &cliOpts
-	//		opts.server.Stop()
-	//	}
-	//}()
 	err := rootCmd.ExecuteContext(ctx)
-	//fmt.Println("waiting")
-	//wg.Wait()
+
 	if err != nil {
-		defaultLogger.Error(err.Error())
+		defaultLogger.Error(
+			"error during execution",
+			slog.String("error", err.Error()),
+		)
 		os.Exit(1)
 	}
 }
@@ -331,31 +312,11 @@ func parseURL(s string) (*url.URL, error) {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	rootCmd.PersistentFlags().StringVarP(
-		&cliOpts.Address,
-		"address",
-		"a",
-		defaultAddress,
-		"Address to connect to/listen from",
-	)
-
-	rootCmd.PersistentFlags().StringVar(
-		&cliOpts.SSLCertfile,
-		"ssl-certfile",
-		"",
-		"SSL certificate file",
-	)
-	_ = serverCmd.MarkFlagFilename("ssl-certfile")
-	rootCmd.PersistentFlags().StringVar(
-		&cliOpts.SSLKeyfile,
-		"ssl-keyfile",
-		"",
-		"SSL key file",
-	)
 	_ = serverCmd.MarkFlagFilename("ssl-keyfile")
-	rootCmd.PersistentFlags().Var(
+	rootCmd.PersistentFlags().StringVar(
 		&cliOpts.LogLevel,
 		"log-level",
+		slog.LevelInfo.String(),
 		"Log level (debug, info, warn, error). Server logs will "+
 			"be written to stdout, while client logs will be written to "+
 			"stderr.",
@@ -367,11 +328,12 @@ func init() {
 		"Log in JSON format",
 	)
 	rootCmd.PersistentFlags().BoolVar(
-		&cliOpts.Quiet,
-		"quiet",
+		&cliOpts.ProfileCPU,
+		"profile",
 		false,
-		"Disables log output",
+		"Profile CPU",
 	)
+
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
 	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
@@ -380,36 +342,34 @@ func init() {
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
 	var err error
-
 	cobra.CheckErr(
 		viper.BindPFlag(
-			"address",
-			rootCmd.Flags().Lookup("address"),
+			"listen_address",
+			serverCmd.Flags().Lookup("listen"),
 		),
 	)
 	viper.SetDefault(
-		"address",
+		"listen_address",
 		defaultAddress,
 	)
 
-	cobra.CheckErr(
-		viper.BindPFlag(
-			"ssl_certfile",
-			rootCmd.Flags().Lookup("ssl-certfile"),
-		),
+	e := viper.BindPFlag(
+		"ssl_certfile",
+		serverCmd.Flags().Lookup("ssl-certfile"),
 	)
+	cobra.CheckErr(e)
 
 	cobra.CheckErr(
 		viper.BindPFlag(
 			"ssl_keyfile",
-			rootCmd.Flags().Lookup("ssl-keyfile"),
+			serverCmd.Flags().Lookup("ssl-keyfile"),
 		),
 	)
 
 	cobra.CheckErr(
 		viper.BindPFlag(
 			"max_value_size",
-			serverCmd.Flags().Lookup("max-value-size"),
+			serverCmd.Flags().Lookup("max-value-bytes"),
 		),
 	)
 	viper.SetDefault("max_value_size", server.DefaultMaxValueSize)
@@ -436,7 +396,6 @@ func initConfig() {
 			serverCmd.Flags().Lookup("revision-limit"),
 		),
 	)
-	viper.SetDefault("revision_limit", 5)
 
 	cobra.CheckErr(
 		viper.BindPFlag(
@@ -444,58 +403,113 @@ func initConfig() {
 			rootCmd.Flags().Lookup("log-level"),
 		),
 	)
+	viper.SetDefault("log_level", slog.LevelInfo.String())
 
 	cobra.CheckErr(
 		viper.BindPFlag(
-			"hash_algorithm",
-			serverCmd.Flags().Lookup("hash-algorithm"),
+			"log_json",
+			rootCmd.Flags().Lookup("log-json"),
 		),
 	)
-	viper.SetDefault("hash_algorithm", "")
+	viper.SetDefault("log_json", false)
+
+	viper.SetDefault("log_events", true)
+	viper.SetDefault("hash_algorithm", crypto.MD5.String())
 
 	cobra.CheckErr(
 		viper.BindPFlag(
-			"snapshot_dir",
+			"snapshot.dir",
 			serverCmd.Flags().Lookup("snapshot-dir"),
 		),
 	)
+	var defaultSnapshotDir string
+	defaultSnapshotDir, _ = os.UserCacheDir()
+	if defaultSnapshotDir != "" {
+		defaultSnapshotDir = filepath.Join(
+			defaultSnapshotDir,
+			"keyquarry",
+			"snapshots",
+		)
+	}
+	viper.SetDefault("snapshot.dir", defaultSnapshotDir)
 
 	cobra.CheckErr(
 		viper.BindPFlag(
-			"snapshot_interval",
+			"snapshot.interval",
 			serverCmd.Flags().Lookup("snapshot-interval"),
 		),
 	)
+	viper.SetDefault("snapshot.interval", "0")
 
 	cobra.CheckErr(
 		viper.BindPFlag(
-			"snapshot_limit",
+			"snapshot.limit",
 			serverCmd.Flags().Lookup("snapshot-limit"),
 		),
 	)
+	viper.SetDefault("snapshot.limit", server.DefaultSnapshotLimit)
 
-	viper.SetEnvPrefix("GOKV")
+	viper.SetDefault("snapshot.secret_key", "")
+
+	cobra.CheckErr(
+		viper.BindPFlag(
+			"snapshot.encrypt",
+			serverCmd.Flags().Lookup("encrypt-snapshots"),
+		),
+	)
+	viper.SetDefault("snapshot.encrypt", true)
+
+	cobra.CheckErr(
+		viper.BindPFlag(
+			"snapshot.enabled",
+			serverCmd.Flags().Lookup("snapshot"),
+		),
+	)
+
+	cobra.CheckErr(
+		viper.BindPFlag(
+			"readonly",
+			serverCmd.Flags().Lookup("readonly"),
+		),
+	)
+	viper.SetDefault("readonly", false)
+
+	viper.SetDefault("max_lock_duration", server.DefaultMaxLockDuration)
+	viper.SetDefault("min_lock_duration", server.DefaultMinLockDuration)
+	viper.SetDefault("min_lifespan", server.DefaultMinExpiry)
+
+	viper.SetDefault("prune_threshold", server.DefaultPruneThreshold)
+	viper.SetDefault("prune_target", server.DefaultPruneTarget)
+	viper.SetDefault("min_prune_interval", server.MinPruneInterval)
+	viper.SetDefault("eager_prune", true)
+	viper.SetDefault(
+		"event_stream_buffer_size",
+		server.DefaultEventStreamBufferSize,
+	)
+	viper.SetDefault(
+		"event_stream_send_timeout",
+		server.DefaultEventStreamSendTimeout,
+	)
+
+	cobra.CheckErr(
+		viper.BindPFlag(
+			"client_id", clientCmd.PersistentFlags().Lookup("client-id"),
+		),
+	)
+
+	viper.SetEnvPrefix("KEYQUARRY")
 	replacer := strings.NewReplacer(".", "_")
 	viper.SetEnvKeyReplacer(replacer)
 	viper.AutomaticEnv() // read in environment variables that match
 
-	// Find home directory.
-	home, e := os.UserHomeDir()
-	if e != nil {
-		defaultLogger.Error(
-			"unable to find home directory",
-			slog.String("error", e.Error()),
-		)
-	}
-
-	// Search config in home directory with name ".gokv" (without extension).
-	if home != "" {
-		viper.AddConfigPath(home)
+	userConfigDir, _ := os.UserConfigDir()
+	if userConfigDir != "" {
+		userConfigDir = filepath.Join(userConfigDir, "keyquarry")
+		viper.AddConfigPath(userConfigDir)
 	}
 	viper.AddConfigPath(".")
-	viper.SetConfigType("yaml")
-	viper.SetConfigName(".gokv-server")
-
+	viper.SetConfigType("env")
+	viper.SetConfigName("keyquarry-server")
 	if cliOpts.configFile == "" {
 		if err = viper.ReadInConfig(); err != nil {
 			var configFileNotFoundError viper.ConfigFileNotFoundError
@@ -506,16 +520,84 @@ func initConfig() {
 		}
 	} else {
 		// use config file specified in the flag
+		defaultLogger.Info("using config file: " + cliOpts.configFile)
 		viper.SetConfigFile(cliOpts.configFile)
 		if err = viper.ReadInConfig(); err != nil {
 			defaultLogger.Error(err.Error())
 			os.Exit(1)
 		}
 	}
+
 	cobra.CheckErr(viper.Unmarshal(&cliOpts))
+
 	if cliOpts.configFile == "" {
 		cliOpts.configFile = viper.ConfigFileUsed()
 	}
+
+}
+
+func bindFlags(cmd *cobra.Command, v *viper.Viper, flagMap map[string]string) {
+	return
+	cmd.Flags().VisitAll(
+		func(f *pflag.Flag) {
+			// Determine the naming convention of the flags when represented in the config file
+			configName := f.Name
+			fmt.Println("checking", configName)
+
+			viperName, exists := flagMap[configName]
+			if f.Changed {
+				fmt.Println(
+					configName,
+					"changed",
+					viperName,
+					f.Value,
+					f.DefValue,
+					exists,
+				)
+			}
+			if exists {
+				if v.IsSet(viperName) {
+					fmt.Println(
+						configName,
+						"is set",
+						viperName,
+						fmt.Sprintf("%#v", v.Get(viperName)),
+					)
+				}
+
+				if !f.Changed && v.IsSet(viperName) {
+					val := v.Get(viperName)
+
+					fmt.Println(
+						"overriding value",
+						f.Name,
+						"from",
+						f.Value,
+						"to",
+						val,
+					)
+					cmd.Flags().Set(f.Name, fmt.Sprintf("%v", val))
+
+				}
+			} else {
+				if !f.Changed && v.IsSet(configName) {
+					val := v.Get(configName)
+					fmt.Println(
+						"overriding value",
+						f.Name,
+						"from",
+						f.Value,
+						"to",
+						val,
+					)
+					cmd.Flags().Set(f.Name, fmt.Sprintf("%v", val))
+				}
+			}
+
+			// Apply the viper config value to the flag when the flag is not set and viper has a value
+
+		},
+	)
 }
 
 func readStdin() ([]string, error) {
@@ -541,20 +623,24 @@ func readStdin() ([]string, error) {
 }
 
 func pmJSON(m proto.Message, indent string) (string, error) {
-	marshaler := jsonpb.Marshaler{Indent: indent}
-	js, err := marshaler.MarshalToString(m)
-	return js, err
+	if indent == "" {
+		data, err := json.Marshal(m)
+		return string(data), err
+	}
+	js, err := json.MarshalIndent(m, "", indent)
+	return string(js), err
 }
 
 func printResult(m proto.Message) {
 	var indent string
 	opts := &cliOpts
-	if opts.IndentJSON > 0 {
-		indent = strings.Repeat(" ", cliOpts.IndentJSON)
+	if opts.ClientOpts.IndentJSON > 0 {
+		indent = strings.Repeat(" ", cliOpts.ClientOpts.IndentJSON)
 	}
 	js, err := pmJSON(m, indent)
 	printError(err)
-	fmt.Println(js)
+	_, err = fmt.Fprintln(out, js)
+	printError(err)
 }
 
 func printError(err error) {

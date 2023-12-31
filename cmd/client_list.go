@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/arcward/gokv/api"
+	"github.com/arcward/keyquarry/api"
 	"github.com/spf13/cobra"
 	"log"
 )
@@ -15,8 +15,9 @@ var listCmd = &cobra.Command{
 		opts := &cliOpts
 		kv, err := opts.client.ListKeys(
 			ctx, &api.ListKeysRequest{
-				Pattern: opts.clientOpts.ListKeyOpts.Pattern,
-				Limit:   opts.clientOpts.ListKeyOpts.Limit,
+				Pattern:         opts.clientOpts.ListKeyOpts.Pattern,
+				Limit:           opts.clientOpts.ListKeyOpts.Limit,
+				IncludeReserved: opts.clientOpts.ListKeyOpts.IncludeReserved,
 			},
 		)
 		if err != nil {
@@ -24,7 +25,7 @@ var listCmd = &cobra.Command{
 		}
 		log.Printf("keys: %#v", kv)
 		for _, k := range kv.Keys {
-			fmt.Println(k)
+			fmt.Fprintln(out, k)
 		}
 
 		return nil
@@ -33,16 +34,22 @@ var listCmd = &cobra.Command{
 
 func init() {
 	clientCmd.AddCommand(listCmd)
-	clientCmd.Flags().StringVar(
+	listCmd.Flags().StringVar(
 		&cliOpts.clientOpts.ListKeyOpts.Pattern,
 		"pattern",
 		"",
 		"pattern to match keys against",
 	)
-	clientCmd.Flags().Uint64Var(
+	listCmd.Flags().Uint64Var(
 		&cliOpts.clientOpts.ListKeyOpts.Limit,
 		"limit",
 		0,
 		"limit the number of keys returned",
+	)
+	listCmd.Flags().BoolVar(
+		&cliOpts.clientOpts.ListKeyOpts.IncludeReserved,
+		"include-reserved",
+		false,
+		"include reserved keys in list",
 	)
 }

@@ -2,48 +2,125 @@ package cmd
 
 import (
 	"context"
-	"crypto"
+	"expvar"
 	"fmt"
-	pb "github.com/arcward/gokv/api"
-	"github.com/arcward/gokv/build"
-	"github.com/arcward/gokv/server"
+	pb "github.com/arcward/keyquarry/api"
+	"github.com/arcward/keyquarry/build"
+	"github.com/arcward/keyquarry/server"
+	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/peer"
-	"io"
 	"log"
 	"log/slog"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/pprof"
 	"strconv"
 	"sync"
 	"time"
 )
 
 var serverCmd = &cobra.Command{
-	Use:          "server",
-	Short:        "Starts a server",
-	SilenceUsage: true,
+	Use:   "server",
+	Short: "Starts a server",
+	//SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		opts := &cliOpts
-		ctx := cmd.Context()
+		cc := &cliOpts
+		if cc.ProfileCPU {
+			f, _ := os.Create("cpuprofile")
+			profErr := pprof.StartCPUProfile(f)
+			if profErr != nil {
+				return profErr
+			}
 
-		serverConfig := &opts.Server
-
-		if opts.hashAlgorithm.Value != crypto.Hash(0) {
-			serverConfig.HashAlgorithm = opts.hashAlgorithm.Value
+			defer pprof.StopCPUProfile()
+			go func() {
+				log.Println(http.ListenAndServe("localhost:5001", nil))
+			}()
 		}
-		u, err := parseURL(opts.Address)
+		opts := &cliOpts
+		serverConfig := &opts.ServerOpts
+
+		if viper.GetString("snapshot.secret_key") != "" {
+			viper.Set("encrypt_snapshots", true)
+		}
+		err := viper.Unmarshal(
+			serverConfig, viper.DecodeHook(
+				mapstructure.ComposeDecodeHookFunc(
+					mapstructure.StringToTimeDurationHookFunc(),
+					mapstructure.StringToSliceHookFunc(","),
+					decodeHashType(),
+				),
+			),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal config: %w", err)
+		}
+
+		if serverConfig.PruneInterval > 0 && serverConfig.PruneInterval < serverConfig.MinPruneInterval {
+			return fmt.Errorf(
+				"prune interval must be at least %s",
+				serverConfig.MinPruneInterval,
+			)
+		}
+		if serverConfig.PruneInterval > 0 && serverConfig.PruneTarget > serverConfig.PruneThreshold {
+			return fmt.Errorf(
+				"prune target must be less than prune threshold",
+			)
+		}
+		if serverConfig.PruneTarget == 0 {
+			serverConfig.PruneTarget = serverConfig.PruneThreshold
+		}
+
+		ctx := cmd.Context()
+		//if !rootCmd.Flags().Changed("log-level") {
+		//	serverConfig.LogLevel = viper.GetString("log_level")
+		//}
+		log.SetOutput(os.Stdout)
+
+		logLevel, _ := getLogLevel(serverConfig.LogLevel)
+		handlerOptions := &slog.HandlerOptions{
+			Level:     logLevel,
+			AddSource: true,
+			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+				switch a.Key {
+				case slog.SourceKey:
+					source := a.Value.Any().(*slog.Source)
+					source.File = filepath.Base(source.File)
+				}
+				return a
+			},
+		}
+		var handler slog.Handler
+		if cliOpts.LogJSON {
+			handler = slog.NewJSONHandler(os.Stdout, handlerOptions)
+		} else {
+			handler = slog.NewTextHandler(os.Stdout, handlerOptions)
+		}
+		defaultLogger = slog.New(handler)
+		slog.SetDefault(defaultLogger)
+
+		u, err := parseURL(serverConfig.ListenAddress)
 		if err != nil {
 			return fmt.Errorf("invalid address: %w", err)
 		}
+		if u.Scheme == "unix" {
+			_, err = os.Stat(u.Host)
+			if err == nil || !os.IsNotExist(err) {
+				return fmt.Errorf(
+					"socket file '%s' already exists",
+					u.Host,
+				)
+			}
+		}
 
-		opts.Address = u.String()
-
+		serverConfig.ListenAddress = u.String()
 		lis, err := net.Listen(
 			u.Scheme,
 			u.Host,
@@ -52,8 +129,7 @@ var serverCmd = &cobra.Command{
 			return fmt.Errorf("failed to listen: %w", err)
 		}
 
-		snapshotDir := opts.SnapshotDir
-		snapshotInterval := opts.SnapshotInterval
+		snapshotDir := serverConfig.Snapshot.Dir
 
 		if snapshotDir != "" {
 			snapshotDir, err := filepath.Abs(snapshotDir)
@@ -64,45 +140,59 @@ var serverCmd = &cobra.Command{
 					err,
 				)
 			}
-			info, err := os.Stat(snapshotDir)
-			if os.IsNotExist(err) {
+			err = os.MkdirAll(snapshotDir, 0700)
+			if err == nil {
+				defaultLogger.Info(
+					"Created snapshot directory",
+					"dir",
+					snapshotDir,
+				)
+			} else if !os.IsExist(err) {
 				return fmt.Errorf(
-					"snapshot directory '%s' does not exist: %w",
+					"failed to create snapshot directory '%s': %w",
 					snapshotDir,
 					err,
 				)
 			}
-			if !info.IsDir() {
+			serverConfig.Snapshot.Dir = snapshotDir
+		}
+
+		var snapshotInitFile string
+		var snapshotData []byte
+		var snapshotErr error
+		if serverConfig.Snapshot.LoadFile != "" {
+			snapshotInitFile = serverConfig.Snapshot.LoadFile
+		} else if serverConfig.Snapshot.Enabled {
+			snapshotInitFile, snapshotErr = latestSnapshot(
+				serverConfig.Snapshot.Dir,
+				serverConfig.Snapshot.Encrypt,
+			)
+		}
+
+		if snapshotErr != nil {
+			return fmt.Errorf(
+				"failed to load latest snapshot from %s: %w",
+				snapshotDir,
+				snapshotErr,
+			)
+		}
+
+		if snapshotInitFile != "" {
+			snapshotData, snapshotErr = os.ReadFile(snapshotInitFile)
+			if snapshotErr != nil {
 				return fmt.Errorf(
-					"snapshot directory is not a directory: %w",
+					"failed to read snapshot file '%s': %w",
+					serverConfig.Snapshot.LoadFile,
 					err,
 				)
 			}
-			if snapshotInterval == 0 {
-				return fmt.Errorf("snapshot interval must be greater than 0")
+			if snapshotData == nil {
+				return fmt.Errorf(
+					"snapshot file '%s' is empty",
+					serverConfig.Snapshot.LoadFile,
+				)
 			}
 		}
-
-		var out io.Writer
-		if cliOpts.Quiet {
-			out = io.Discard
-		} else {
-			out = os.Stdout
-		}
-		log.SetOutput(out)
-
-		handlerOptions := &slog.HandlerOptions{
-			Level:     cliOpts.LogLevel,
-			AddSource: true,
-		}
-		var handler slog.Handler
-		if cliOpts.LogJSON {
-			handler = slog.NewJSONHandler(out, handlerOptions)
-		} else {
-			handler = slog.NewTextHandler(out, handlerOptions)
-		}
-		defaultLogger = slog.New(handler).WithGroup("gokv")
-		slog.SetDefault(defaultLogger)
 
 		if build.Version != "" {
 			defaultLogger = defaultLogger.With(
@@ -114,52 +204,32 @@ var serverCmd = &cobra.Command{
 		}
 
 		serverConfig.Logger = defaultLogger
-
-		var snapshotData []byte
-		var loadSnapshot string
-
-		if opts.LoadSnapshot != "" {
-			loadSnapshot = opts.LoadSnapshot
-		} else if opts.SnapshotDir != "" {
-			loadSnapshot, err = latestSnapshot(opts.SnapshotDir)
-			if err != nil {
-				return fmt.Errorf(
-					"failed to load latest snapshot from %s: %w",
-					snapshotDir,
-					err,
-				)
-			}
-		}
-
-		if loadSnapshot != "" {
-			loadSnapshot, err = filepath.Abs(loadSnapshot)
-			if err != nil {
-				return fmt.Errorf(
-					"failed to get absolute path for snapshot file '%s': %w",
-					loadSnapshot,
-					err,
-				)
-			}
-			snapshotData, err = os.ReadFile(loadSnapshot)
-			if err != nil {
-				return fmt.Errorf(
-					"failed to read snapshot file '%s': %w",
-					loadSnapshot,
-					err,
-				)
-			}
-		}
-
-		var srv *server.KeyValueStore
+		srv := cliOpts.server
 		if snapshotData == nil {
 			defaultLogger.Info(
 				"creating new server",
 			)
-			srv = server.NewServer(serverConfig)
+			srv, err = server.NewServer(serverConfig)
+			if err != nil {
+				return fmt.Errorf("failed to create server: %w", err)
+			}
+		} else if serverConfig.Snapshot.Encrypt {
+			defaultLogger.Info(
+				"creating new server from encrypted snapshot",
+				slog.Group("snapshot", slog.String("file", snapshotInitFile)),
+			)
+			srv, err = server.NewServerFromEncryptedSnapshot(
+				serverConfig.Snapshot.SecretKey,
+				snapshotData,
+				serverConfig,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to load snapshot: %w", err)
+			}
 		} else {
 			defaultLogger.Info(
 				"creating new server from snapshot",
-				slog.Group("snapshot", slog.String("file", loadSnapshot)),
+				slog.Group("snapshot", slog.String("file", snapshotInitFile)),
 			)
 			srv, err = server.NewServerFromSnapshot(
 				snapshotData,
@@ -169,135 +239,155 @@ var serverCmd = &cobra.Command{
 				return fmt.Errorf("failed to load snapshot: %w", err)
 			}
 		}
-		srv.WithEventStream(ctx)
-		cliOpts.server = srv
 
-		snapshotter, err := server.NewSnapshotter(
-			srv,
-			snapshotDir,
-			snapshotInterval,
-			cliOpts.SnapshotLimit,
-		)
-
-		var runSnapshotter bool
-		if snapshotInterval > 0 {
-			runSnapshotter = true
-		}
-
-		var snapshotOnShutdown bool
-		if snapshotInterval > 0 || snapshotDir != "" {
-			snapshotOnShutdown = true
-		}
-
-		if err != nil {
-			return fmt.Errorf("failed to create snapshotter: %w", err)
-		}
+		opts.server = srv
 		var grpcServer *grpc.Server
 
-		if opts.SSLCertfile != "" && opts.SSLKeyfile != "" {
+		baseOpts := &cliOpts
+		if serverConfig.SSLCertfile != "" && serverConfig.SSLKeyfile != "" {
 			creds, err := credentials.NewServerTLSFromFile(
-				opts.SSLCertfile,
-				opts.SSLKeyfile,
+				serverConfig.SSLCertfile,
+				serverConfig.SSLKeyfile,
 			)
 			if err != nil {
 				log.Fatalf("failed to load TLS keys: %s", err.Error())
 			}
 			grpcServer = grpc.NewServer(
-				grpc.UnaryInterceptor(unaryLoggingInterceptor(opts.server)),
+				grpc.UnaryInterceptor(server.ClientIDInterceptor(baseOpts.server)),
 				grpc.Creds(creds),
 			)
 		} else {
-			grpcServer = grpc.NewServer(grpc.UnaryInterceptor(unaryLoggingInterceptor(opts.server)))
+			grpcServer = grpc.NewServer(
+				grpc.UnaryInterceptor(
+					server.ClientIDInterceptor(baseOpts.server),
+				),
+			)
 		}
-		opts.grpcServer = grpcServer
+		baseOpts.grpcServer = grpcServer
 
 		pb.RegisterKeyValueStoreServer(
 			grpcServer,
 			cliOpts.server,
 		)
+		settings := []slog.Attr{slog.String("config.file", baseOpts.configFile)}
 
-		defaultLogger.Info(
-			"starting server",
-			"config", *serverConfig,
-			slog.String("listen_address", lis.Addr().String()),
-			slog.String("config_file", opts.configFile),
-			slog.String("ssl_certfile", opts.SSLCertfile),
-			slog.String("ssl_keyfile", opts.SSLKeyfile),
-			slog.String("log_level", cliOpts.LogLevel.String()),
-			slog.Group(
-				"snapshot",
-				slog.String("dir", snapshotDir),
-				slog.Duration("interval", snapshotInterval),
-			),
-		)
-		if runSnapshotter {
-			go snapshotter.Run(ctx)
+		for k, v := range viper.AllSettings() {
+			if k == "secret_key" || k == "privileged_client_ids" {
+				continue
+			}
+			settings = append(
+				settings,
+				slog.Any(fmt.Sprintf("config.%s", k), v),
+			)
 		}
+		defaultLogger.LogAttrs(
+			ctx,
+			slog.LevelInfo,
+			"starting server",
+			settings...,
+		)
+
+		sctx, scancel := context.WithCancel(ctx)
+
 		wg := &sync.WaitGroup{}
 
+		// Start the event stream and snapshotter - when the context is
+		// cancelled, that propagates to both, and the Start() function
+		// should return.
+		srvDone := make(chan struct{})
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
+			expvar.Publish(
+				"keyquarry",
+				expvar.Func(func() any { return srv.GetStats() }),
+			)
+			if e := srv.Start(sctx); e != nil {
+				panic(fmt.Errorf("failed to start server: %w", e))
+			}
+			srvDone <- struct{}{}
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			select {
 			case <-ctx.Done():
-				wg.Add(1)
-				defer wg.Done()
+				// When the main context is cancelled, gracefully stop
+				// the GRPC server. When that's done, we cancel the
+				// KeyValueStore context that was passed to Start().
+				// We don't use the same context or a child context for
+				// that, because it might be cancelled before the server
+				// is done shutting down.
+				// Then, we wait for the signal that Start() has returned,
+				// so we know it's safe to call Stop(), which will stop the
+				// event stream, close its channels, and take a final
+				// snapshot.
+				defaultLogger.Info("shutting down server")
 				grpcServer.GracefulStop()
-				if snapshotOnShutdown {
-					snapshotter.Stop()
-					finalSnapshotFilename := fmt.Sprintf(
-						"gokv-snapshot-%d.json.gz",
-						time.Now().Unix(),
-					)
-					finalSnapshot := filepath.Join(
-						snapshotDir,
-						finalSnapshotFilename,
-					)
-					err = snapshotter.Snapshot(finalSnapshot)
-					if err == nil {
-						snapshotter.Logger().Info(
-							"saved snapshot on shutdown",
-							slog.String("file", finalSnapshot),
-						)
-					} else {
-						snapshotter.Logger().Error(
-							"failed to save final snapshot",
-							slog.String("file", finalSnapshot),
-							slog.String("error", err.Error()),
-						)
-					}
-					snapshotter.Logger().Info(
-						fmt.Sprintf(
-							"snapshots created during runtime: %v",
-							snapshotter.Snapshots,
-						),
+
+				socketCleanupDone := make(chan struct{}, 1)
+				if u.Scheme == "unix" {
+					go func() {
+						socketErr := os.Remove(u.Host)
+						if socketErr != nil && !os.IsNotExist(socketErr) {
+							defaultLogger.Error(
+								"failed to remove socket file",
+								slog.String("error", socketErr.Error()),
+							)
+						}
+						socketCleanupDone <- struct{}{}
+					}()
+				} else {
+					socketCleanupDone <- struct{}{}
+				}
+
+				// cancel KeyValueStore context, wait for Start() to return,
+				// then stop. Finally, wait for the socket cleanup to finish.
+				scancel()
+				<-srvDone
+				defaultLogger.Debug("got done signal, waiting for server to stop")
+				stopErr := srv.Stop()
+				if stopErr != nil {
+					defaultLogger.Error(
+						"failed to stop server",
+						slog.String("error", stopErr.Error()),
 					)
 				}
+				defaultLogger.Debug("waiting for socket cleanup, if needed")
+				<-socketCleanupDone
+				return
 			}
 		}()
 
-		err = grpcServer.Serve(lis)
-		if err == nil {
-			fmt.Println("done")
-		} else {
+		if err = grpcServer.Serve(lis); err != nil {
 			defaultLogger.Error(
-				fmt.Sprintf(
-					"Failed to serve: %v",
-					err,
-				),
+				"failed to serve",
+				slog.String("error", err.Error()),
 			)
 		}
+		// Waits for KeyValueStore.Start() to return, for the GRPC
+		// server to shut down gracefully, for KeyValueStore.Stop() to
+		// finish, and possibly for a unix socket file to be removed.
 		wg.Wait()
-		return err
+		defaultLogger.Info("server stopped")
+		return nil
 	},
 }
 
-func latestSnapshot(dir string) (filename string, err error) {
+func latestSnapshot(dir string, encrypted bool) (filename string, err error) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		return "", err
 	}
 	var latestTime time.Time
 	var latestFile string
-	pattern := regexp.MustCompile(`gokv-snapshot-(\d+)\.json\.gz`)
+	var pattern *regexp.Regexp
+	if encrypted {
+		pattern = regexp.MustCompile(`(\d+)\.json\.aes\.gz`)
+	} else {
+		pattern = regexp.MustCompile(`(\d+)\.json\.gz`)
+	}
 
 	for _, file := range files {
 		matches := pattern.FindStringSubmatch(file.Name())
@@ -320,119 +410,120 @@ func latestSnapshot(dir string) (filename string, err error) {
 	return filepath.Join(dir, latestFile), nil
 }
 
-func unaryLoggingInterceptor(srv *server.KeyValueStore) grpc.UnaryServerInterceptor {
-	f := func(
-		ctx context.Context,
-		req any,
-		info *grpc.UnaryServerInfo,
-		handler grpc.UnaryHandler,
-	) (resp any, err error) {
-		md, ok := metadata.FromIncomingContext(ctx)
-		if ok {
-			ctx = metadata.NewOutgoingContext(ctx, md)
-		}
-		p, ok := peer.FromContext(ctx)
-		if ok && p != nil {
-			srv.Logger().InfoContext(
-				ctx, "received call",
-				slog.Any("metadata", md),
-				slog.Group(
-					"peer",
-					slog.String("address", p.Addr.String()),
-					slog.Any("auth_type", p.AuthInfo),
-				),
-			)
-		} else {
-			srv.Logger().InfoContext(
-				ctx, "received call",
-				slog.Any("metadata", md),
-			)
-		}
-
-		return handler(ctx, req)
-	}
-	return f
-}
-
 func init() {
 	rootCmd.AddCommand(serverCmd)
-	serverCmd.PersistentFlags().StringVar(
+	serverCmd.Flags().StringVar(
+		&cliOpts.ServerOpts.ListenAddress,
+		"listen",
+		defaultAddress,
+		"Address to listen on",
+	)
+
+	serverCmd.Flags().StringVar(
+		&cliOpts.ServerOpts.SSLCertfile,
+		"ssl-certfile",
+		"",
+		"SSL certificate file",
+	)
+	_ = serverCmd.MarkFlagFilename("ssl-certfile")
+	serverCmd.Flags().StringVar(
+		&cliOpts.ServerOpts.SSLKeyfile,
+		"ssl-keyfile",
+		"",
+		"SSL key file",
+	)
+	serverCmd.Flags().StringVar(
 		&cliOpts.configFile,
 		"config",
 		"",
-		"config file (default is $HOME/.gokv.yaml)",
+		"config file (default is keyquarry-server.env)",
 	)
 	serverCmd.Flags().Uint64Var(
-		&cliOpts.Server.MaxNumberOfKeys,
+		&cliOpts.ServerOpts.MaxNumberOfKeys,
 		"max-keys",
 		server.DefaultMaxKeys,
 		"Maximum number of keys",
 	)
 	serverCmd.Flags().Uint64Var(
-		&cliOpts.Server.MaxValueSize,
-		"max-value-size",
+		&cliOpts.ServerOpts.MaxValueSize,
+		"max-value-bytes",
 		server.DefaultMaxValueSize,
 		"Maximum size of a value (in bytes)",
 	)
 	serverCmd.Flags().Uint64Var(
-		&cliOpts.Server.MaxKeySize,
+		&cliOpts.ServerOpts.MaxKeySize,
 		"max-key-size",
 		server.DefaultMaxKeySize,
 		"Maximum size of a key (in bytes)",
 	)
 	serverCmd.Flags().Int64Var(
-		&cliOpts.Server.RevisionLimit,
+		&cliOpts.ServerOpts.RevisionLimit,
 		"revision-limit",
 		server.DefaultRevisionLimit,
 		"Maximum size of history. 0=disabled, -1=unlimited",
 	)
-	serverCmd.Flags().BoolVar(
-		&cliOpts.Server.KeepExpiredKeys,
-		"keep-expired-keys",
-		false,
-		"Do not delete expired keys",
-	)
-	serverCmd.Flags().Var(
-		&cliOpts.hashAlgorithm,
-		"hash-algorithm",
-		"Hash algorithm to use for key hashing",
-	)
-	//serverCmd.Flags().StringVar(
-	//	&cliOpts.Server.Backup,
-	//	"backup",
-	//	"",
-	//	"Backup file to load on startup and write on shutdown",
+	//serverCmd.Flags().BoolVar(
+	//	&cliOpts.ServerOpts.KeepExpiredKeys,
+	//	"keep-expired-keys",
+	//	false,
+	//	"Do not delete expired keys",
 	//)
+	//serverCmd.Flags().StringVar(
+	//	&cliOpts.ServerOpts.HashAlgorithm,
+	//	"hash-algorithm",
+	//	"",
+	//	"Hash algorithm to use for key hashing",
+	//)
+	snapopts := &cliOpts.ServerOpts.Snapshot
+
 	serverCmd.Flags().StringVar(
-		&cliOpts.LoadSnapshot,
+		&snapopts.LoadFile,
 		"load-snapshot",
 		"",
 		"Loads the specified snapshot file on startup",
 	)
 	serverCmd.Flags().StringVar(
-		&cliOpts.SnapshotDir,
+		&snapopts.Dir,
 		"snapshot-dir",
 		"",
-		"Directory to store snapshots. If specified, the server will "+
+		"Directory t	LogLevel      o store snapshots. If specified, the server will "+
 			"load the most recent snapshot found in the directory on startup, "+
-			"matching the filename gokv-snapshot-*.json.gz. On shutdown, the "+
+			"matching the filename keyquarry-snapshot-*.json.gz. On shutdown, the "+
 			"server will write a final snapshot, regardless of the snapshot "+
 			"interval.",
 	)
-	serverCmd.MarkFlagDirname("snapshot-dir")
+	_ = serverCmd.MarkFlagDirname("snapshot-dir")
 	serverCmd.Flags().DurationVar(
-		&cliOpts.SnapshotInterval,
+		&snapopts.Interval,
 		"snapshot-interval",
 		0,
 		"Interval to take snapshots",
 	)
 	serverCmd.Flags().IntVar(
-		&cliOpts.SnapshotLimit,
+		&snapopts.Limit,
 		"snapshot-limit",
-		0,
+		server.DefaultSnapshotLimit,
 		"Maximum number of snapshots to keep. 0=unlimited. Otherwise, "+
 			"whenever a new snapshot is created, the oldest snapshot(s) over the "+
 			"limit will be deleted (only snapshots created by the same process "+
 			"will be removed, not all snapshots in the directory).",
+	)
+	serverCmd.Flags().BoolVar(
+		&snapopts.Encrypt,
+		"encrypt-snapshots",
+		false,
+		"Encrypt snapshots at rest (requires setting KEYQUARRY_SNAPSHOT_SECRET_KEY). If a secret key has been set, this defaults to true",
+	)
+	serverCmd.Flags().BoolVar(
+		&cliOpts.ServerOpts.Snapshot.Enabled,
+		"snapshot",
+		false,
+		"Enable snapshots",
+	)
+	serverCmd.Flags().BoolVar(
+		&cliOpts.ServerOpts.Readonly,
+		"readonly",
+		false,
+		"Starts the server in read-only mode",
 	)
 }

@@ -3,8 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
-	pb "github.com/arcward/gokv/api"
+	pb "github.com/arcward/keyquarry/api"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"log"
 	"log/slog"
 	"runtime"
@@ -34,8 +35,17 @@ var bulkSetCmd = &cobra.Command{
 		cfg := &cliOpts.clientOpts
 		pending := make([]*pb.KeyValue, 0, len(vals))
 		doneChannel := make(chan setResult)
-		lockDuration := uint32(cfg.LockTimeout.Seconds())
-		expires := uint32(cfg.ExpireKeyIn.Seconds())
+
+		var lockDuration *durationpb.Duration
+		if cfg.LockTimeout > 0 {
+			lockDuration = durationpb.New(cfg.LockTimeout)
+		}
+
+		var expireAfter *durationpb.Duration
+		if cfg.KeyLifespan.Seconds() > 0 {
+			expireAfter = durationpb.New(cfg.KeyLifespan)
+		}
+
 		for _, v := range vals {
 			if ctx.Err() != nil {
 				printError(fmt.Errorf("cancelled: %w", ctx.Err()))
@@ -46,9 +56,8 @@ var bulkSetCmd = &cobra.Command{
 				&pb.KeyValue{
 					Key:          key,
 					Value:        []byte(value),
-					Lock:         cfg.Lock,
 					LockDuration: lockDuration,
-					ExpireIn:     expires,
+					Lifespan:     expireAfter,
 				},
 			)
 		}
@@ -109,22 +118,16 @@ var bulkSetCmd = &cobra.Command{
 func init() {
 	clientCmd.AddCommand(bulkSetCmd)
 	bulkSetCmd.Flags().DurationVar(
-		&cliOpts.clientOpts.ExpireKeyIn,
-		"expires",
+		&cliOpts.clientOpts.KeyLifespan,
+		"lifespan",
 		0,
 		"Expire key in specified duration (e.g. 1h30m)",
 	)
-	bulkSetCmd.Flags().BoolVar(
-		&cliOpts.clientOpts.Lock,
-		"lock",
-		false,
-		"Lock the key",
-	)
 	bulkSetCmd.Flags().DurationVar(
 		&cliOpts.clientOpts.LockTimeout,
-		"lock-timeout",
+		"lock",
 		0,
-		"Lock timeout",
+		"Lock duration (ex: 15m)",
 	)
 
 }

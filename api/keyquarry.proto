@@ -1,0 +1,201 @@
+syntax = "proto3";
+
+option go_package = "github.com/arcward/keyquarry/api";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+package keyquarry;
+
+service KeyValueStore {
+  // Set sets a key/value pair. If the key already exists,
+  // it will be updated. If the key already exists and is
+  // locked, an error will be returned. If the key already
+  // exists and is expired (and not locked), it will be deleted
+  // and created as new.
+  rpc Set(KeyValue) returns (SetResponse);
+  // Get returns the value of a key. If the key does not exist,
+  // an error will be returned.
+  rpc Get(Key) returns (GetResponse);
+  // GetKeyInfo returns metadata about a key. If the key does not
+  // exist, an error will be returned.
+  rpc GetKeyInfo(Key) returns (GetKeyValueInfoResponse);
+  // Delete deletes a key. If the key does not exist, an error
+  // will be returned. If the key is locked, an error will
+  // be returned.
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  // Exists indicates whether a key exists.
+  rpc Exists(Key) returns (ExistsResponse);
+  // Pop returns the value of a key and deletes it. If the key
+  // is locked or doesn't exist, an error will be returned.
+  rpc Pop(PopRequest) returns (GetResponse);
+  // Clear deletes all unlocked keys from the store.
+  rpc Clear(ClearRequest) returns (ClearResponse);
+  // ListKeys returns a list of keys matching a pattern.
+  rpc ListKeys(ListKeysRequest) returns (ListKeysResponse);
+  // Stats returns statistics about the store.
+  rpc Stats(EmptyRequest) returns (ServerMetrics);
+  // ClearHistory deletes all history entries for unlocked keys.
+  rpc ClearHistory(EmptyRequest) returns (ClearHistoryResponse);
+  // Lock locks a key for a given duration. If the key is already locked, an
+  // error will be returned. If no duration is provided, the lock will not
+  // expire.
+  rpc Lock(LockRequest) returns (LockResponse);
+  // Unlock unlocks a key. If the key is not locked, nothing will happen.
+  rpc Unlock(UnlockRequest) returns (UnlockResponse);
+  // GetRevision gets the value of a key at a specific revision, with
+  // its timestamp
+  rpc GetRevision(GetRevisionRequest) returns (RevisionResponse);
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc SetReadOnly(ReadOnlyRequest) returns (ReadOnlyResponse);
+}
+
+message ReadOnlyRequest {
+  bool enable = 1;
+}
+
+message ReadOnlyResponse {
+  bool success = 1;
+}
+
+message RegisterRequest {}
+message RegisterResponse {
+  bool success = 1;
+  string client_id = 2;
+}
+
+message DeleteRequest {
+  string key = 1;
+}
+
+message PopRequest {
+  string key = 1;
+}
+
+message GetRevisionRequest {
+  string key = 1;
+  uint64 version = 2;
+
+}
+
+message RevisionResponse {
+  bytes value = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message EmptyRequest {}
+
+/* ListKeysRequest represents a request to list keys in the store. The pattern
+ * field is a glob pattern to match keys against. The limit field is the maximum
+ * number of keys to return. */
+message ListKeysRequest {
+  string pattern = 1;  // Regex pattern to match keys against
+  uint64 limit = 2;   // Maximum number of keys to return (0 for no limit)
+  bool include_reserved = 3; // true to include reserved keys
+}
+
+message ServerMetrics {
+  optional uint64 keys = 1;  // Number of keys in the store
+  optional uint64 total_size = 2;  // Total size of all values in the store
+  optional uint64 new = 3;  // Number of get requests
+  optional uint64 updated = 4;  // Number of set requests
+  optional uint64 deleted = 5;  // Number of delete requests
+  optional uint64 locked = 6;  // Number of exists requests
+  optional uint64 unlocked = 7;  // Number of list keys requests
+  optional uint64 expired = 8;  // Number of new keys set
+  optional uint64 expunged = 9;  // Number of keys updated
+  optional uint64 current_locks = 10;
+  optional uint64 client_ids = 11;
+}
+
+
+// KeyValue represents a key/value pair
+message KeyValue {
+  string key = 1;  // Key of value
+  bytes value = 2;  // Value associated with the key
+  string content_type = 3;
+  optional google.protobuf.Duration lock_duration = 4;  // Lock options
+  optional google.protobuf.Duration lifespan = 5;  // Expiration options
+}
+
+
+
+// UnlockRequest represents a request to unlock a key
+message UnlockRequest {
+  string key = 1;
+}
+
+// UnlockResponse indicates whether a key was unlocked
+message UnlockResponse {
+  bool success = 1;
+}
+
+// LockRequest represents a request to lock a key
+message LockRequest {
+  string key = 1; // Key to lock
+  google.protobuf.Duration duration = 2; // Time to lock in seconds (0 for no unlock)
+  bool create_if_missing = 3; // true to create the key if it doesn't exist
+}
+
+// LockResponse indicates whether a key was locked
+message LockResponse {
+  bool success = 1; // true if the lock was acquired
+}
+
+// ListKeysResponse represents a list of keys
+message ListKeysResponse {
+  repeated string keys = 1;
+}
+
+message ClearHistoryResponse {
+  int64 keys = 1;  // Number of keys cleared
+  int64 cleared = 2;  // Number of history entries cleared
+}
+
+// GetKeyValueInfoResponse represents the metadata for a key/value pair
+message GetKeyValueInfoResponse {
+  string key = 1 ; // Key of value
+  string hash = 2; // MD5 hash of value
+  google.protobuf.Timestamp created = 3;  // Unix timestamp of when the key was created
+  optional google.protobuf.Timestamp updated = 4;  // Unix timestamp of when the key was last updated
+  uint64 version = 5;  // Version of the key (incremented on each update)
+  uint64 size = 7;  // Size of the value in bytes
+  bool locked = 8;  // true if the key is locked
+  string content_type = 9; // Content type of the value
+  bool expired = 10; // true if the key is expired
+}
+
+// Key represents only a key
+message Key {
+  string key = 1;
+}
+
+message ClearRequest {
+  bool force = 1; // true to clear locked keys
+}
+// ClearResponse indicates whether the store was cleared, and how many keys were deleted
+message ClearResponse {
+  bool success = 1;  // true if the store was cleared
+  uint64 keys_deleted = 2;  // Number of keys deleted
+}
+
+// ExistsResponse indicates whether a key exists
+message ExistsResponse {
+  bool exists = 1;
+}
+
+// SetResponse indicates whether a key was set, and if it's a new key
+message SetResponse {
+  bool success = 1;  // true if the key was set
+  bool is_new = 2;  // true if the key was not previously set
+}
+
+// DeleteResponse indicates whether a key was deleted
+message DeleteResponse {
+  bool deleted = 1;  // true if the key was deleted
+}
+
+// GetResponse represents the value of a key
+message GetResponse {
+  bytes value = 1;  // Value associated with the key
+}

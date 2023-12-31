@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	pb "github.com/arcward/gokv/api"
+	pb "github.com/arcward/keyquarry/api"
 	"github.com/spf13/cobra"
 )
 
@@ -15,7 +15,9 @@ var unlockCmd = &cobra.Command{
 		opts := &cliOpts
 		kv, err := opts.client.Unlock(
 			ctx,
-			&pb.UnlockRequest{Key: key},
+			&pb.UnlockRequest{
+				Key: key,
+			},
 		)
 		printError(err)
 		printResult(kv)

@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	pb "github.com/arcward/gokv/api"
+	pb "github.com/arcward/keyquarry/api"
 	"github.com/spf13/cobra"
 )
 
@@ -14,7 +14,7 @@ var deleteCmd = &cobra.Command{
 
 		key := args[0]
 		opts := &cliOpts
-		kv, err := opts.client.Delete(ctx, &pb.Key{Key: key})
+		kv, err := opts.client.Delete(ctx, &pb.DeleteRequest{Key: key})
 		printError(err)
 		printResult(kv)
 	},

@@ -2,9 +2,9 @@
 
 OUTPUT_DIR=${PWD}/dist
 BINARY_DIR=${OUTPUT_DIR}/bin
-BINARY_NAME=gokv
+BINARY_NAME=keyquarry
 BINARY_PATH=${BINARY_DIR}/${BINARY_NAME}
-AUTOCOMPLETE_PATH_BASH=${OUTPUT_DIR}/autocomplete/bash/gokv
+AUTOCOMPLETE_PATH_BASH=${OUTPUT_DIR}/autocomplete/bash/keyquarry
 
 
 BUILD_TIME=$(shell date -u --iso-8601=seconds)
@@ -15,7 +15,7 @@ CGO_ENABLED ?= 0
 GOOS ?= linux
 GOARCH ?= amd64
 
-GO_BUILD_LDFLAGS=-ldflags "-X 'github.com/arcward/gokv/build.Version=${VERSION}' -X 'github.com/arcward/gokv/build.Time=${BUILD_TIME}' -X 'github.com/arcward/gokv/build.User=${BUILD_USER}' -X 'github.com/arcward/gokv/build.Commit=${COMMIT}'"
+GO_BUILD_LDFLAGS=-ldflags "-X 'github.com/arcward/keyquarry/build.Version=${VERSION}' -X 'github.com/arcward/keyquarry/build.Time=${BUILD_TIME}' -X 'github.com/arcward/keyquarry/build.User=${BUILD_USER}' -X 'github.com/arcward/keyquarry/build.Commit=${COMMIT}'"
 GO_BUILD_FLAGS=${GO_BUILD_LDFLAGS} -o ${BINARY_PATH}
 
 .PHONY: all
@@ -23,7 +23,7 @@ all: test proto build autocomplete-bash
 
 .PHONY: proto
 proto:
-	@protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative api/gokv.proto
+	@protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative api/keyquarry.proto
 
 
 .PHONY: test

@@ -23,21 +23,6 @@ var configCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		fmt.Println(string(yamlConfig))
-		//var cfg CLIConfig
-		//
-		//cp := &cfg
-		//err := viper.Unmarshal(cp)
-		//if err != nil {
-		//	fmt.Println(err)
-		//	os.Exit(1)
-		//}
-		//
-		//d, err := yaml.Marshal(cp)
-		//if err != nil {
-		//	fmt.Println(err)
-		//	os.Exit(1)
-		//}
-		//fmt.Println(string(d))
 	},
 }
 
