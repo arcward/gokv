@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"github.com/arcward/keyquarry/build"
 	"github.com/arcward/keyquarry/client"
+	"github.com/arcward/keyquarry/server"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -47,8 +49,6 @@ var clientCmd = &cobra.Command{
 			if err != nil && os.IsNotExist(err) {
 				return fmt.Errorf("socket file '%s' not found", u.Host)
 			}
-			opts.ClientOpts.Address = opts.ClientOpts.Address
-			//opts.ClientOpts.Address = u.String()
 		} else {
 			opts.ClientOpts.Address = u.Host
 		}
@@ -89,22 +89,23 @@ var clientCmd = &cobra.Command{
 		if cfg.ClientID == "" {
 			clientID := viper.GetString("client_id")
 			if clientID == "" {
-				hostname, err := os.Hostname()
-				if err != nil {
-					return err
+				clientID, _ = os.Hostname()
+				user, _ := user.Current()
+				if user != nil {
+					if user.Username != "" {
+						clientID = fmt.Sprintf("%s@%s", user.Username, clientID)
+					}
 				}
-				user, err := user.Current()
-				if err != nil {
-					return err
-				}
-				clientID = fmt.Sprintf("%s@%s", user.Username, hostname)
 			}
 			cfg.ClientID = clientID
 		}
 
 		kvClient := opts.client
 		if kvClient == nil {
-			kvClient = client.NewClient(cfg, grpc.WithBlock())
+			kvClient = client.NewClient(
+				cfg,
+				grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+			)
 			opts.client = kvClient
 		}
 
@@ -118,6 +119,7 @@ var clientCmd = &cobra.Command{
 		if dialErr != nil {
 			statusCode := status.Code(dialErr)
 			if statusCode != codes.AlreadyExists {
+				fmt.Printf("err: %s", dialErr.Error())
 				log.Fatalf("unable to connect: %s\n", dialErr.Error())
 			}
 		}
@@ -138,10 +140,10 @@ var clientCmd = &cobra.Command{
 						os.Exit(1)
 					}
 					return
-
 				}
 			}
 		}()
+
 		return err
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -155,7 +157,7 @@ func init() {
 		&cliOpts.ClientOpts.Address,
 		"address",
 		"a",
-		defaultAddress,
+		server.DefaultAddress,
 		"Address to connect to/listen from",
 	)
 	clientCmd.PersistentFlags().StringVar(
@@ -170,7 +172,8 @@ func init() {
 		"",
 		"SSL certificate file",
 	)
-	clientCmd.MarkFlagFilename("ca-certfile")
+
+	cobra.CheckErr(clientCmd.MarkPersistentFlagFilename("ca-certfile"))
 	clientCmd.PersistentFlags().BoolVar(
 		&cliOpts.ClientOpts.Quiet,
 		"quiet",

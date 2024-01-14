@@ -25,7 +25,8 @@ var listCmd = &cobra.Command{
 		}
 		log.Printf("keys: %#v", kv)
 		for _, k := range kv.Keys {
-			fmt.Fprintln(out, k)
+			_, err = fmt.Fprintln(out, k)
+			printError(err)
 		}
 
 		return nil

@@ -17,9 +17,9 @@ service KeyValueStore {
   // Get returns the value of a key. If the key does not exist,
   // an error will be returned.
   rpc Get(Key) returns (GetResponse);
-  // GetKeyInfo returns metadata about a key. If the key does not
+  // Inspect returns metadata about a key. If the key does not
   // exist, an error will be returned.
-  rpc GetKeyInfo(Key) returns (GetKeyValueInfoResponse);
+  rpc Inspect(InspectRequest) returns (InspectResponse);
   // Delete deletes a key. If the key does not exist, an error
   // will be returned. If the key is locked, an error will
   // be returned.
@@ -48,6 +48,31 @@ service KeyValueStore {
   rpc GetRevision(GetRevisionRequest) returns (RevisionResponse);
   rpc Register(RegisterRequest) returns (RegisterResponse);
   rpc SetReadOnly(ReadOnlyRequest) returns (ReadOnlyResponse);
+  rpc WatchStream(WatchRequest) returns (stream Event);
+  rpc GetKeyMetric(KeyMetricRequest) returns (KeyMetric);
+  rpc WatchKeyValue(WatchKeyValueRequest)  returns (stream WatchKeyValueResponse);
+}
+
+
+message WatchKeyValueRequest {
+  string key = 1;
+}
+
+message WatchKeyValueResponse{
+  string key = 1;
+  bytes value = 2;
+  string content_type = 3;
+  uint64 hash = 4;
+  uint64 version = 5;
+  KeyEvent key_event = 6;
+  string event_client_id = 7;
+  google.protobuf.Timestamp event_timestamp = 8;
+}
+
+message WatchRequest {
+  repeated string keys = 1;
+  repeated KeyEvent events = 2;
+  repeated string client_ids = 3;
 }
 
 message ReadOnlyRequest {
@@ -74,7 +99,7 @@ message PopRequest {
 
 message GetRevisionRequest {
   string key = 1;
-  uint64 version = 2;
+  int64 version = 2;
 
 }
 
@@ -97,15 +122,32 @@ message ListKeysRequest {
 message ServerMetrics {
   optional uint64 keys = 1;  // Number of keys in the store
   optional uint64 total_size = 2;  // Total size of all values in the store
-  optional uint64 new = 3;  // Number of get requests
-  optional uint64 updated = 4;  // Number of set requests
-  optional uint64 deleted = 5;  // Number of delete requests
-  optional uint64 locked = 6;  // Number of exists requests
-  optional uint64 unlocked = 7;  // Number of list keys requests
-  optional uint64 expired = 8;  // Number of new keys set
-  optional uint64 expunged = 9;  // Number of keys updated
-  optional uint64 current_locks = 10;
-  optional uint64 client_ids = 11;
+  optional uint64 current_locks = 3;
+  optional uint64 client_ids = 4;
+  optional uint64 reapers = 5;
+  optional uint64 event_subscribers = 6;
+  optional uint64 snapshots_created = 7;
+  EventMetrics events = 8;
+  KeyPressure pressure = 9;
+}
+
+message EventMetrics {
+  optional uint64 new = 1;  // Number of get requests
+  optional uint64 updated = 2;  // Number of set requests
+  optional uint64 deleted = 3;  // Number of delete requests
+  optional uint64 locked = 4;  // Number of exists requests
+  optional uint64 unlocked = 5;  // Number of list keys requests
+  optional uint64 expired = 6;  // Number of new keys set
+  optional uint64 expunged = 7;  // Number of keys updated
+  optional uint64 accessed = 8;
+  optional uint64 lifespan_set = 9;
+}
+message KeyPressure {
+  optional uint64 keys = 1;
+  optional uint64 max = 2;
+  optional float used = 3;
+  optional float prune_threshold = 4;
+  optional int64 keys_over_threshold = 5;
 }
 
 
@@ -153,21 +195,68 @@ message ClearHistoryResponse {
 }
 
 // GetKeyValueInfoResponse represents the metadata for a key/value pair
-message GetKeyValueInfoResponse {
+message InspectResponse {
   string key = 1 ; // Key of value
-  string hash = 2; // MD5 hash of value
+  uint64 hash = 2; // MD5 hash of value
   google.protobuf.Timestamp created = 3;  // Unix timestamp of when the key was created
   optional google.protobuf.Timestamp updated = 4;  // Unix timestamp of when the key was last updated
   uint64 version = 5;  // Version of the key (incremented on each update)
   uint64 size = 7;  // Size of the value in bytes
-  bool locked = 8;  // true if the key is locked
-  string content_type = 9; // Content type of the value
-  bool expired = 10; // true if the key is expired
+  optional bool locked = 8;  // true if the key is locked
+  google.protobuf.Duration lifespan = 9;
+  google.protobuf.Timestamp lifespan_set = 10;
+  string content_type = 11; // Content type of the value
+  optional bytes value = 12;
+  optional KeyMetric metrics = 13;
 }
+
+message KeyMetricRequest {
+  string key = 1;
+}
+
+message KeyMetric {
+  uint64 access_count = 1;
+  google.protobuf.Timestamp first_accessed = 2;
+  google.protobuf.Timestamp last_accessed = 3;
+  uint64 set_count = 4;
+  google.protobuf.Timestamp first_set = 5;
+  google.protobuf.Timestamp last_set = 6;
+  uint64 lock_count = 7;
+  google.protobuf.Timestamp first_locked = 8;
+  google.protobuf.Timestamp last_locked = 9;
+}
+
+enum KeyEvent {
+  NO_EVENT = 0;
+  CREATED = 1;
+  UPDATED = 2;
+  DELETED = 3;
+  EXPIRED = 4;
+  LOCKED = 5;
+  UNLOCKED = 6;
+  EXPUNGED = 7;
+  ACCESSED = 8;
+  LIFESPAN_SET = 9;
+}
+
+message Event {
+  string key = 1;
+  KeyEvent event = 2;
+  google.protobuf.Timestamp time = 3;
+  string client_id = 4;
+}
+
+
 
 // Key represents only a key
 message Key {
   string key = 1;
+}
+
+message InspectRequest {
+  string key = 1;
+  bool include_value = 2;
+  bool include_metrics = 3;
 }
 
 message ClearRequest {

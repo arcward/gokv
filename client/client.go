@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	DefaultDialTimeout          = 5 * time.Second
-	DefaultDialKeepAliveTime    = 10 * time.Second
+	DefaultDialTimeout          = 10 * time.Second
+	DefaultDialKeepAliveTime    = 30 * time.Second
 	DefaultDialKeepAliveTimeout = 60 * time.Second
 )
 
@@ -86,7 +86,7 @@ func (c *Client) GetRevision(
 	logger.Info(
 		"getting key revision",
 		slog.String("key", in.Key),
-		slog.Uint64("version", in.Version),
+		slog.Int64("version", in.Version),
 	)
 	opts := append(c.callOpts, grpc.MaxCallRecvMsgSize(1024*1024*1024))
 	rv, err := c.client.GetRevision(ctx, in, opts...)
@@ -98,17 +98,34 @@ func (c *Client) GetRevision(
 	return rv, err
 }
 
-func (c *Client) GetKeyInfo(
+func (c *Client) Inspect(
 	ctx context.Context,
-	in *api.Key,
+	in *api.InspectRequest,
 	opts ...grpc.CallOption,
-) (*api.GetKeyValueInfoResponse, error) {
+) (*api.InspectResponse, error) {
 	logger := c.requestLogger(ctx)
 	logger.Info("getting key info", slog.String("key", in.Key))
 	opts = append(opts, c.callOpts...)
-	rv, err := c.client.GetKeyInfo(ctx, in, opts...)
+	rv, err := c.client.Inspect(ctx, in, opts...)
 	logger.Debug(
 		"key info response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
+}
+
+func (c *Client) GetKeyMetric(
+	ctx context.Context,
+	in *api.KeyMetricRequest,
+	opts ...grpc.CallOption,
+) (*api.KeyMetric, error) {
+	logger := c.requestLogger(ctx)
+	logger.Info("getting key metrics", slog.String("key", in.Key))
+	opts = append(opts, c.callOpts...)
+	rv, err := c.client.GetKeyMetric(ctx, in, opts...)
+	logger.Debug(
+		"get metrics response",
 		slog.Any("response", rv),
 		slog.Any("error", err),
 	)
@@ -310,7 +327,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("ca_certfile", c.CACert),
 		slog.Bool("quiet", c.Quiet),
 		slog.Int("indent_json", c.IndentJSON),
-		//slog.String("client_id", c.ClientID),
+		// slog.String("client_id", c.ClientID),
 		slog.Duration("dial_timeout", c.DialTimeout),
 		slog.Duration("dial_keep_alive_time", c.DialKeepAliveTime),
 		slog.Duration("dial_keep_alive_timeout", c.DialKeepAliveTimeout),
@@ -329,32 +346,7 @@ func (c Config) DialOpts() []grpc.DialOption {
 		),
 	}
 
-	var tlsEnabled bool
-
-	if c.CACert != "" {
-		creds, err := credentials.NewClientTLSFromFile(
-			c.CACert,
-			"",
-		)
-		if err != nil {
-			log.Fatalln(err)
-		}
-		opts = append(
-			opts,
-			grpc.WithTransportCredentials(creds),
-		)
-		tlsEnabled = true
-	}
-	if c.InsecureSkipVerify {
-		tlsConfig := &tls.Config{InsecureSkipVerify: true}
-		creds := credentials.NewTLS(tlsConfig)
-		opts = append(
-			opts,
-			grpc.WithTransportCredentials(creds),
-		)
-		tlsEnabled = true
-	}
-	if c.NoTLS || !tlsEnabled {
+	if c.NoTLS {
 		if c.Logger == nil {
 			slog.Warn("TLS is disabled")
 		} else {
@@ -362,10 +354,43 @@ func (c Config) DialOpts() []grpc.DialOption {
 		}
 		insc := grpc.WithTransportCredentials(insecure.NewCredentials())
 		opts = append(opts, insc)
+	} else {
+		tlsSet := false
+		if c.CACert != "" {
+			creds, err := credentials.NewClientTLSFromFile(
+				c.CACert,
+				"",
+			)
+			if err != nil {
+				log.Fatalln(err)
+			}
+			opts = append(
+				opts,
+				grpc.WithTransportCredentials(creds),
+			)
+			tlsSet = true
+		}
+		if c.InsecureSkipVerify {
+			tlsConfig := &tls.Config{InsecureSkipVerify: true}
+			creds := credentials.NewTLS(tlsConfig)
+			opts = append(
+				opts,
+				grpc.WithTransportCredentials(creds),
+			)
+			tlsSet = true
+		}
+		if !tlsSet {
+
+			opts = append(
+				opts,
+				grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})),
+			)
+		}
 	}
 	opts = append(
 		opts,
-		grpc.WithUnaryInterceptor(ClientIDInterceptor(c.ClientID)),
+		grpc.WithUnaryInterceptor(IDInterceptor(c.ClientID)),
+		grpc.WithStreamInterceptor(IDStreamInterceptor(c.ClientID)),
 	)
 	if c.ExtraDialOpts != nil {
 		opts = append(opts, c.ExtraDialOpts...)
@@ -416,7 +441,7 @@ func NewClient(cfg *Config, opts ...grpc.DialOption) *Client {
 	return client
 }
 
-func ClientIDInterceptor(clientID string) grpc.UnaryClientInterceptor {
+func IDInterceptor(clientID string) grpc.UnaryClientInterceptor {
 	return func(
 		ctx context.Context,
 		method string,
@@ -428,6 +453,54 @@ func ClientIDInterceptor(clientID string) grpc.UnaryClientInterceptor {
 		ctx = metadata.AppendToOutgoingContext(ctx, "client_id", clientID)
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
+}
+
+func IDStreamInterceptor(clientID string) grpc.StreamClientInterceptor {
+	return func(
+		ctx context.Context,
+		desc *grpc.StreamDesc,
+		cc *grpc.ClientConn,
+		method string,
+		streamer grpc.Streamer,
+		opts ...grpc.CallOption,
+	) (grpc.ClientStream, error) {
+		ctx = metadata.AppendToOutgoingContext(ctx, "client_id", clientID)
+		return streamer(ctx, desc, cc, method, opts...)
+	}
+}
+
+func (c *Client) WatchKeyValue(
+	ctx context.Context,
+	in *api.WatchKeyValueRequest,
+) (api.KeyValueStore_WatchKeyValueClient, error) {
+	logger := c.requestLogger(ctx)
+	opts := append(c.callOpts, grpc.MaxCallRecvMsgSize(1024*1024*1024))
+	stream, err := c.client.WatchKeyValue(ctx, in, opts...)
+	if err != nil {
+		logger.Error(
+			"error creating key value watch stream",
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+	return stream, nil
+}
+
+func (c *Client) WatchStream(
+	ctx context.Context,
+	in *api.WatchRequest,
+) (api.KeyValueStore_WatchStreamClient, error) {
+	logger := c.requestLogger(ctx)
+	opts := append(c.callOpts, grpc.MaxCallRecvMsgSize(1024*1024*1024))
+	stream, err := c.client.WatchStream(ctx, in, opts...)
+	if err != nil {
+		logger.Error(
+			"error creating watch stream",
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+	return stream, nil
 }
 
 func (c *Client) Register(

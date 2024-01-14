@@ -1,0 +1,118 @@
+services:
+  server:
+    image: keyquarry:dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: server
+    restart: no
+    depends_on:
+      - snapshotdb
+    ports:
+      - "33969:33969"
+      - "33970:33970"
+    environment:
+      KEYQUARRY_GRACEFUL_SHUTDOWN_TIMEOUT: 30s
+      KEYQUARRY_READONLY: 0
+      KEYQUARRY_PRIVILEGED_CLIENT_ID: dockerclient
+      KEYQUARRY_EVENT_STREAM_BUFFER_SIZE: 10000
+      KEYQUARRY_EVENT_STREAM_SEND_TIMEOUT: 1s
+
+      # Log configuration
+      KEYQUARRY_LOG_EVENTS: 1
+      KEYQUARRY_LOG_JSON: 0
+      KEYQUARRY_LOG_LEVEL: INFO
+
+      # Snapshot configuration
+      KEYQUARRY_SNAPSHOT_ENABLED: 1
+      KEYQUARRY_SNAPSHOT_INTERVAL: 30s
+      KEYQUARRY_SNAPSHOT_DATABASE: postgres://keyquarry:keyquarry@snapshotdb:5432/keyquarry?sslmode=disable
+#      KEYQUARRY_START_FRESH: 1
+
+      # Prune configuration
+      KEYQUARRY_EAGER_PRUNE: 1
+      KEYQUARRY_PRUNE_TARGET: 0.80
+      KEYQUARRY_PRUNE_THRESHOLD: 0.90
+      KEYQUARRY_PRUNE_INTERVAL: 15m
+
+      # Key/value limits
+      KEYQUARRY_MAX_VALUE_SIZE: 1000000
+      KEYQUARRY_MAX_KEY_LENGTH: 1000
+      KEYQUARRY_MAX_LOCK_DURATION: 1h
+      KEYQUARRY_MAX_KEYS: 0  # 0 = unlimited
+
+      KEYQUARRY_REVISION_LIMIT: 10
+#      KEYQUARRY_SSL_CERTFILE: /etc/ssl/certs/keyquarry.crt
+#      KEYQUARRY_SSL_KEYFILE: /etc/ssl/certs/keyquarry.key
+
+      KEYQUARRY_TRACE: true
+#      KEYQUARRY_PPROF: true
+#      KEYQUARRY_EXPVAR: true
+      KEYQUARRY_MONITOR_ADDRESS: ":33970"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_INSECURE: true
+
+#      GRPC_GO_LOG_VERBOSITY_LEVEL: 99
+#      GRPC_GO_LOG_SEVERITY_LEVEL: info
+    entrypoint:
+      - "keyquarry"
+      - "server"
+    command:
+      - "--log-level"
+      - "INFO"
+      - "--listen"
+      - ":33969"
+#    volumes:
+#      - type: bind
+#        source: ./certs
+#        target: /etc/ssl/certs
+  client:
+    image: keyquarry:dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - server
+    restart: no
+    entrypoint:
+      - "keyquarry"
+      - "client"
+      - "--address"
+      - "server:33969"
+      - "--no-tls"
+      - "--client-id"
+      - "dockerclient"
+    command:
+      - "--log-level"
+      - "INFO"
+      - "watch"
+  snapshotdb:
+    image: postgres:13-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: keyquarry
+      POSTGRES_PASSWORD: keyquarry
+      POSTGRES_DB: keyquarry
+    ports:
+      - "5432:5432"
+    volumes:
+      - type: volume
+        source: snapshots
+        target: /var/lib/postgresql/data
+        volume: {}
+  jaeger:
+    image: jaegertracing/all-in-one:1.53
+    restart: unless-stopped
+    ports:
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+      - "14250:14250"
+      - "14268:14268"
+      - "9411:9411"
+volumes:
+  snapshots:

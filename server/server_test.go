@@ -1,9 +1,7 @@
 package server
 
 import (
-	"compress/gzip"
 	"context"
-	"crypto"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,17 +30,16 @@ import (
 
 const bufSize = 1024 * 1024
 
-// var lis *bufconn.Listener
-// var srv *KeyValueStore
-// var s *grpc.Server
-var signals = make(chan os.Signal, 1)
-var ctx context.Context
-var cancel context.CancelFunc
-var defaultClientID = "foo"
-var testTimeout time.Duration = 60 * time.Second
-var dialTimeout = 10 * time.Second
+var (
+	signals         = make(chan os.Signal, 1)
+	ctx             context.Context
+	cancel          context.CancelFunc
+	defaultClientID               = "foo"
+	testTimeout     time.Duration = 60 * time.Second
+	dialTimeout                   = 10 * time.Second
+)
 
-func newServer(t *testing.T, lis *bufconn.Listener, cfg *Config) (
+func newServer(t testing.TB, lis *bufconn.Listener, cfg *Config) (
 	*KeyValueStore,
 	*bufconn.Listener,
 ) {
@@ -52,7 +49,6 @@ func newServer(t *testing.T, lis *bufconn.Listener, cfg *Config) (
 	var s *grpc.Server
 
 	log.SetOutput(io.Discard)
-	fmt.Println("starting stuff")
 	if lis == nil {
 		lis = bufconn.Listen(bufSize)
 	}
@@ -69,17 +65,17 @@ func newServer(t *testing.T, lis *bufconn.Listener, cfg *Config) (
 	var err error
 	if cfg == nil {
 		cfg = DefaultConfig()
-		cfg.HashAlgorithm = crypto.MD5
 		cfg.RevisionLimit = 2
 		cfg.MinLifespan = time.Duration(1) * time.Second
 		cfg.MinLockDuration = time.Duration(1) * time.Second
 		cfg.EagerPrune = false
 		cfg.PruneInterval = 0
 		cfg.LogLevel = "ERROR"
+		cfg.Name = t.Name()
 	}
 	handler := slog.NewTextHandler(
 		os.Stdout,
-		&slog.HandlerOptions{AddSource: true, Level: slog.LevelError},
+		&slog.HandlerOptions{AddSource: true, Level: slog.LevelDebug},
 	)
 	logger := slog.New(handler).WithGroup(t.Name())
 	slog.SetDefault(logger)
@@ -133,7 +129,7 @@ func newServer(t *testing.T, lis *bufconn.Listener, cfg *Config) (
 		func() {
 			t.Logf("stopping server listener")
 			s.GracefulStop()
-			//lis.Close()
+			// lis.Close()
 			tcancel()
 			t.Logf("cancelled srv context")
 			<-srvDone
@@ -184,7 +180,7 @@ func newBadClient(
 	if clientID != nil {
 		dialOpts = append(
 			dialOpts,
-			grpc.WithUnaryInterceptor(kclient.ClientIDInterceptor(*clientID)),
+			grpc.WithUnaryInterceptor(kclient.IDInterceptor(*clientID)),
 		)
 	}
 
@@ -198,7 +194,7 @@ func newBadClient(
 	}
 	t.Cleanup(
 		func() {
-			clientConn.Close()
+			_ = clientConn.Close()
 			tcancel()
 		},
 	)
@@ -208,7 +204,7 @@ func newBadClient(
 }
 
 func newClient(
-	t *testing.T,
+	t testing.TB,
 	srv *KeyValueStore,
 	lis *bufconn.Listener,
 	clientID string,
@@ -252,7 +248,6 @@ func newClient(
 	}
 	client := kclient.NewClient(
 		&clientCfg,
-		grpc.WithBlock(),
 		grpc.WithContextDialer(
 			func(
 				context.Context,
@@ -284,6 +279,16 @@ func newClient(
 			}
 		}
 	}()
+
+	for {
+		srv.mu.RLock()
+		started := srv.started
+		srv.mu.RUnlock()
+		if started {
+			break
+		}
+	}
+
 	return client
 }
 
@@ -359,7 +364,6 @@ func TestRunServer(t *testing.T) {
 	)
 
 	cfg := DefaultConfig()
-	cfg.HashAlgorithm = crypto.MD5
 	cfg.RevisionLimit = 2
 	cfg.MinLifespan = time.Duration(1) * time.Second
 	cfg.MinLockDuration = time.Duration(1) * time.Second
@@ -393,7 +397,7 @@ func TestRunServer(t *testing.T) {
 
 	stopSignal := make(chan struct{}, 1)
 	go func() {
-		RunServer(tctx, grpcServer, lis, srv)
+		_ = RunServer(tctx, grpcServer, lis, srv)
 		stopSignal <- struct{}{}
 	}()
 
@@ -487,8 +491,8 @@ func TestMaxKeyLength(t *testing.T) {
 	// validate that we can't create a key greater than the max
 	srv, lis := newServer(t, nil, nil)
 	client := newClient(t, srv, lis, "")
-	keychars := make([]byte, 0, DefaultMaxKeySize*2)
-	for i := 0; i < int(DefaultMaxKeySize*2); i++ {
+	keychars := make([]byte, 0, DefaultMaxKeyLength*2)
+	for i := 0; i < int(DefaultMaxKeyLength*2); i++ {
 		keychars = append(keychars, 'a')
 	}
 	key := string(keychars)
@@ -507,7 +511,7 @@ func TestMaxKeyLength(t *testing.T) {
 func TestKeyNotFound(t *testing.T) {
 	srv, lis := newServer(t, nil, nil)
 	client := newClient(t, srv, lis, "")
-	_, err := client.GetKeyInfo(ctx, &pb.Key{Key: "foo"})
+	_, err := client.Inspect(ctx, &pb.InspectRequest{Key: "foo"})
 	assertNotNil(t, err)
 	e, _ := status.FromError(err)
 	assertErrorCode(t, e.Code(), codes.NotFound)
@@ -549,7 +553,7 @@ func TestEagerPrune(t *testing.T) {
 		keys = append(keys, fmt.Sprintf("key-%d", i+1))
 	}
 	srv.cfgMu.RUnlock()
-	watcher, err := srv.Subscribe("foo")
+	watcher, err := srv.Subscribe(ctx, "foo", nil, nil)
 	fatalOnErr(t, err)
 
 	expungeSeen := map[string]bool{}
@@ -618,6 +622,15 @@ func TestEagerPrune(t *testing.T) {
 
 	t.Logf("keys to create: %d", len(keys))
 	for ind, k := range keys {
+		// For whatever reason, I'm running into an issue where this test
+		// randomly fails, because one or two keys created report their
+		// LastSet as 1 MILLISECOND after the time created by
+		// `KeyValueStore.pruneNumKeys`... which doesn't make sense, because
+		// that time.Time is only created on a subsequent key, after having
+		// already hit the key limit. This happens even after ensuring it's
+		// set before emitting the Created signal. Might be something wonky
+		// with virtualbox?
+		time.Sleep(1 * time.Millisecond)
 		t.Logf("checking key %s", k)
 		currentCt := srv.numKeys.Load() // - srv.numReservedKeys.Load()
 		t.Logf("setting %s", k)
@@ -663,6 +676,7 @@ func TestEagerPrune(t *testing.T) {
 		for _, k := range keys {
 			t.Logf("%s expunged: %t", k, expungeSeen[k])
 		}
+		t.Logf("unexpected expunge: %+v", unexpectedExpunge)
 		t.Fatalf(
 			"timed out waiting for allTrueSignal. current: %+v",
 			expungeSeen,
@@ -679,38 +693,40 @@ func TestEagerPrune(t *testing.T) {
 
 }
 
-func fatalOnErr(t *testing.T, err error, msg ...string) {
-	t.Helper()
-	if err != nil {
-		t.Fatalf("error: %s / %s", err.Error(), strings.Join(msg, " ... "))
-	}
-}
-
 func TestKeySort(t *testing.T) {
 	fooCreated := time.Now()
 
 	barCreated := fooCreated.Add(time.Duration(-12) * time.Hour)
 	watUpdated := barCreated.Add(time.Duration(1) * time.Hour)
+	futureLock := fooCreated.Add(time.Duration(1) * time.Hour) // locked an hour from now
 	expectedOrder := []string{"bar", "wat", "foo", "baz"}
 
-	keys := []keyInfoWithLock{
+	keys := []keyWithMetric{
 		{
 			kv: &KeyValueInfo{
-				Key:     "foo",
-				Created: fooCreated, // created now
+				Key: "foo",
+			},
+			metric: &KeyMetrics{
+				FirstSet: &fooCreated, // created just now
+				LastSet:  &fooCreated,
 			},
 		},
 		{
 			kv: &KeyValueInfo{
-				Key:     "bar",
-				Created: barCreated, // created 12 hours ago
+				Key: "bar",
+			},
+			metric: &KeyMetrics{
+				FirstSet: &barCreated, // created 12 hours ago
+				LastSet:  &barCreated,
 			},
 		},
 		{
 			kv: &KeyValueInfo{
-				Key:     "wat",
-				Created: barCreated, // created 12 hours ago
-				Updated: watUpdated, // updated 11 hours ago
+				Key: "wat",
+			},
+			metric: &KeyMetrics{
+				FirstSet: &barCreated, // created 12 hours ago
+				LastSet:  &watUpdated, // updated 11 hours ago
 			},
 		},
 		{
@@ -718,16 +734,191 @@ func TestKeySort(t *testing.T) {
 				Key:     "baz",
 				Created: fooCreated, // created now
 			},
-			lock: &KeyLock{
-				Created: fooCreated.Add(time.Duration(1) * time.Hour), // locked an hour from now
+			metric: &KeyMetrics{
+				FirstSet:    &fooCreated, // created 12 hours ago
+				LastSet:     &fooCreated,
+				FirstLocked: &futureLock,
+				LastLocked:  &futureLock, // locked an hour from now
 			},
 		},
 	}
+	scores := map[string]float64{}
+	now := time.Now()
+	for _, k := range keys {
+		scores[k.kv.Key] = k.metric.StaleScore(now)
+	}
+	t.Logf("scores: %#v", scores)
+
 	sorted := sortKeyValueInfoByDates(keys)
 	assertEqual(t, len(sorted), len(keys))
 	for ind, k := range sorted {
 		assertEqual(t, k.kv.Key, expectedOrder[ind])
 	}
+}
+
+func TestDBSnapshot(t *testing.T) {
+	tmpdir := t.TempDir()
+	dbfile := filepath.Join(tmpdir, "test.db")
+
+	cfg := DefaultConfig()
+	cfg.Name = t.Name()
+	connStr := fmt.Sprintf("sqlite://%s", dbfile)
+	cfg.Snapshot.Database = connStr
+
+	dialect := GetDialect(connStr)
+	if dialect == nil {
+		t.Fatalf("failed to get dialect")
+	}
+	err := dialect.InitDB(ctx, connStr)
+	fatalOnErr(t, err)
+
+	srv, lis := newServer(t, nil, cfg)
+	client := newClient(t, srv, lis, "")
+
+	srv.cfgMu.RLock()
+	revLimit := srv.Config().RevisionLimit
+	srv.cfgMu.RUnlock()
+
+	_, err = client.Set(
+		ctx, &pb.KeyValue{
+			Key:          "foo",
+			Value:        []byte("bar"),
+			LockDuration: durationpb.New(5 * time.Minute),
+			Lifespan:     durationpb.New(120 * time.Minute),
+		},
+	)
+	fatalOnErr(t, err)
+
+	for i := 0; i < int(revLimit)+5; i++ {
+		_, err = client.Set(
+			ctx, &pb.KeyValue{
+				Key:          "foo",
+				Value:        []byte(fmt.Sprintf("baz-%d", i)),
+				LockDuration: durationpb.New(60 * time.Minute),
+				// Lifespan:     durationpb.New(120 * time.Minute),
+			},
+		)
+		fatalOnErr(t, err)
+	}
+
+	_, err = client.Get(ctx, &pb.Key{Key: "foo"})
+	fatalOnErr(t, err)
+
+	srv.cfgMu.RLock()
+	srv.mu.RLock()
+	srv.lockMu.RLock()
+	srv.reaperMu.RLock()
+	srv.keyStatMu.RLock()
+	srv.cmu.RLock()
+
+	snapshotID, err := srv.snapshotter.DBSnapshot(ctx)
+	fatalOnErr(t, err)
+	db, err := dialect.DBConn(connStr)
+	fatalOnErr(t, err)
+	t.Cleanup(
+		func() {
+			_ = db.Close()
+		},
+	)
+
+	snapshotRec, err := dialect.GetSnapshot(ctx, db, snapshotID)
+	fatalOnErr(t, err)
+	assertEqual(t, snapshotRec.ServerName, t.Name())
+
+}
+
+func TestInspectWithValue(t *testing.T) {
+	srv, lis := newServer(t, nil, nil)
+	client := newClient(t, srv, lis, "")
+
+	k := &pb.KeyValue{Key: "foo", Value: []byte("bar")}
+	_, err := client.Set(ctx, k)
+	failOnErr(t, err)
+
+	inspect, err := client.Inspect(
+		ctx,
+		&pb.InspectRequest{Key: k.Key, IncludeValue: true},
+	)
+	failOnErr(t, err)
+	assertEqual(t, inspect.Key, k.Key)
+	assertSlicesEqual(t, inspect.Value, k.Value)
+
+	inspect, err = client.Inspect(
+		ctx,
+		&pb.InspectRequest{
+			Key:            k.Key,
+			IncludeValue:   true,
+			IncludeMetrics: true,
+		},
+	)
+	failOnErr(t, err)
+	assertEqual(t, inspect.Metrics.AccessCount, 1)
+
+}
+
+func TestLoadDBSnapshot(t *testing.T) {
+	tmpdir := t.TempDir()
+	dbfile := filepath.Join(tmpdir, "test.db")
+
+	cfg := DefaultConfig()
+	cfg.Name = t.Name()
+	connStr := fmt.Sprintf("sqlite://%s", dbfile)
+	cfg.Snapshot.Database = connStr
+
+	dialect := GetDialect(connStr)
+	if dialect == nil {
+		t.Fatalf("failed to get dialect")
+	}
+	err := dialect.InitDB(ctx, connStr)
+	fatalOnErr(t, err)
+
+	srv, lis := newServer(t, nil, cfg)
+	client := newClient(t, srv, lis, "")
+
+	srv.cfgMu.RLock()
+	srv.cfgMu.RUnlock()
+
+	fooKV := &pb.KeyValue{
+		Key:          "foo",
+		Value:        []byte("bar"),
+		LockDuration: durationpb.New(5 * time.Minute),
+		Lifespan:     durationpb.New(120 * time.Minute),
+	}
+	_, err = client.Set(
+		ctx, fooKV,
+	)
+	fatalOnErr(t, err)
+
+	srv.cfgMu.RLock()
+	srv.mu.RLock()
+	srv.lockMu.RLock()
+	srv.reaperMu.RLock()
+	srv.keyStatMu.RLock()
+	srv.cmu.RLock()
+
+	snapshotID, err := srv.snapshotter.DBSnapshot(ctx)
+	fatalOnErr(t, err)
+
+	newCfg := DefaultConfig()
+	newCfg.Name = t.Name()
+	newCfg.Snapshot.Database = connStr
+	newSrv, err := ServerFromDB(ctx, newCfg)
+	fatalOnErr(t, err)
+	kv, exists := newSrv.store[fooKV.Key]
+	if !exists {
+		t.Fatalf("expected to find key %s", fooKV.Key)
+	}
+
+	assertSlicesEqual(t, kv.Value, fooKV.Value)
+
+	db, err := dialect.DBConn(connStr)
+	fatalOnErr(t, err)
+
+	rec, err := dialect.GetSnapshot(ctx, db, snapshotID)
+	fatalOnErr(t, err)
+	assertEqual(t, rec.ServerName, cfg.Name)
+	assertEqual(t, rec.ID, snapshotID)
+	assertEqual(t, rec.Created.IsZero(), false)
 
 }
 
@@ -858,9 +1049,9 @@ func TestUpdateWithLockDuraton(t *testing.T) {
 	_, err = client.Set(ctx, k)
 	failOnErr(t, err)
 
-	kv, err := client.GetKeyInfo(ctx, &pb.Key{Key: k.Key})
+	kv, err := client.Inspect(ctx, &pb.InspectRequest{Key: k.Key})
 	failOnErr(t, err)
-	assertEqual(t, kv.Locked, true)
+	assertEqual(t, *kv.Locked, true)
 
 	_, ok := srv.store[k.Key]
 	assertEqual(t, ok, true)
@@ -914,9 +1105,9 @@ func TestKeyLockCreateIfMissing(t *testing.T) {
 	failOnErr(t, err)
 	assertEqual(t, rv.Success, true)
 
-	kvInfo, err := client.GetKeyInfo(ctx, &pb.Key{Key: kv.Key})
+	kvInfo, err := client.Inspect(ctx, &pb.InspectRequest{Key: kv.Key})
 	failOnErr(t, err)
-	assertEqual(t, kvInfo.Locked, true)
+	assertEqual(t, *kvInfo.Locked, true)
 
 	uv, err := client.Unlock(
 		ctx,
@@ -934,7 +1125,7 @@ func TestUpdateExpiration(t *testing.T) {
 	value := []byte("bar")
 	expireAfter := 30 * time.Minute
 
-	// set a Key, initially unlocked
+	// set a key, initially unlocked, with 30min lifespan
 	kx := &pb.KeyValue{
 		Key:      key,
 		Value:    value,
@@ -944,16 +1135,23 @@ func TestUpdateExpiration(t *testing.T) {
 	failOnErr(t, err)
 
 	srv.mu.RLock()
+	// srv.reaperMu.RLock()
+
 	kvData, ok := srv.store[key]
 	if !ok {
 		srv.mu.RUnlock()
 		t.Fatal("expected Key in store")
 	}
+
+	srv.reaperMu.RLock()
+	keyReaper, hasReaper := srv.reapers[key]
+	srv.reaperMu.RUnlock()
+
 	kvData.mu.RLock()
 	srv.mu.RUnlock()
 
-	assertEqual(t, kvData.expired, false)
-	assertEqual(t, kvData.Lifespan.Seconds(), expireAfter.Seconds())
+	assertEqual(t, hasReaper, true)
+	assertEqual(t, keyReaper.Lifespan.Seconds(), expireAfter.Seconds())
 	kvData.mu.RUnlock()
 
 	newExpiration := 1 * time.Hour
@@ -962,8 +1160,11 @@ func TestUpdateExpiration(t *testing.T) {
 	failOnErr(t, err)
 
 	kvData.mu.RLock()
-	assertEqual(t, kvData.expired, false)
-	assertEqual(t, kvData.Lifespan.Seconds(), newExpiration.Seconds())
+	srv.reaperMu.RLock()
+	newExpiry, hasReaper := srv.reapers[key]
+	assertEqual(t, hasReaper, true)
+	assertEqual(t, newExpiry.Lifespan.Seconds(), newExpiration.Seconds())
+	srv.reaperMu.RUnlock()
 	kvData.mu.RUnlock()
 }
 
@@ -974,16 +1175,15 @@ func TestKeyLock(t *testing.T) {
 	key := "foo"
 	value := []byte("bar")
 
-	// set a Key, initially unlocked
+	// set a key, initially unlocked
 	kx := &pb.KeyValue{Key: key, Value: value}
 	_, err := client.Set(ctx, kx)
 	failOnErr(t, err)
 
 	pk := &pb.Key{Key: key}
-	kvInfo, err := client.GetKeyInfo(ctx, pk)
+	kvInfo, err := client.Inspect(ctx, &pb.InspectRequest{Key: key})
 	failOnErr(t, err)
-
-	assertEqual(t, kvInfo.Locked, false)
+	assertEqual(t, *kvInfo.Locked, false)
 
 	// lock it for 5 seconds
 	now := time.Now()
@@ -995,6 +1195,7 @@ func TestKeyLock(t *testing.T) {
 	failOnErr(t, err)
 	assertEqual(t, rv.Success, true)
 
+	// validate the lock is in place
 	srv.mu.RLock()
 	keyInfo := srv.store[key]
 	keyInfo.mu.Lock()
@@ -1004,48 +1205,45 @@ func TestKeyLock(t *testing.T) {
 	assertEqual(t, locked, true)
 	keyInfo.mu.Unlock()
 
+	// shouldn't be able to update a locked key from another client ID
 	otherClient := newClient(t, srv, lis, "someotherclientid")
-	// shouldn't be able to update a Locked Key
 	_, err = otherClient.Set(ctx, kx)
 	assertErrorCode(t, status.Code(err), codes.PermissionDenied)
 
-	// shouldn't be able to delete a Locked Key
+	// shouldn't be able to delete a locked key from another client ID
 	_, err = otherClient.Delete(ctx, &pb.DeleteRequest{Key: key})
 	assertErrorCode(t, status.Code(err), codes.PermissionDenied)
 
 	// should be able to see it
-	kvInfo, err = otherClient.GetKeyInfo(ctx, pk)
+	kvInfo, err = otherClient.Inspect(ctx, &pb.InspectRequest{Key: key})
 	failOnErr(t, err)
-	assertEqual(t, kvInfo.Locked, true)
+	assertEqual(t, *kvInfo.Locked, true)
 
+	// unless we request the value from another client
+	_, err = otherClient.Inspect(
+		ctx,
+		&pb.InspectRequest{Key: key, IncludeValue: true},
+	)
+	assertErrorCode(t, status.Code(err), codes.PermissionDenied)
+
+	// validate the lock is in place
 	srv.mu.RLock()
 	keyInfo, ok := srv.store[key]
 	keyLock, _ := srv.locks[key]
 	srv.mu.RUnlock()
-
 	assertEqual(t, ok, true)
 
 	assertNotEqual(t, keyLock, nil)
 	assertEqual(t, keyLock.Created.IsZero(), false)
+
+	// wait for the lock to expire, update it with one that doesn't expire,
+	// with an expiration of 1 second
 	for n := time.Now(); n.Before(unlockedAt); n = time.Now() {
 		time.Sleep(1 * time.Second)
 	}
 
-	kx.Value = []byte("baz")
-	kx.LockDuration = nil
-
-	// should be unlocked, able to be updated
-	// we update it with a lock that doesn't expire
-	setResponse, err := client.Set(ctx, kx)
-	failOnErr(t, err)
-	assertEqual(t, setResponse.Success, true)
-	assertEqual(t, setResponse.IsNew, false)
-	keyInfo.mu.Lock()
-	keyInfo.mu.Unlock()
-	// set the expiration for 1 second, then wait for it to expire
-	_, err = client.Delete(ctx, &pb.DeleteRequest{Key: key})
-	failOnErr(t, err)
-
+	// set a lock duration 10 secs, lifespan 1 sec, and validate it
+	// deletes before the lock is up
 	dur := time.Duration(10) * time.Second
 	kx.LockDuration = durationpb.New(dur)
 	exp := time.Duration(1) * time.Second
@@ -1055,53 +1253,8 @@ func TestKeyLock(t *testing.T) {
 	assertEqual(t, kr.Success, true)
 
 	time.Sleep(3 * time.Second)
-	kvInfo, err = client.GetKeyInfo(ctx, pk)
-	failOnErr(t, err)
-
-	newKeyInfo := srv.store[key]
-	assertNotEqual(t, keyInfo, newKeyInfo)
-	keyInfo = newKeyInfo
-	// normally, the expiration is checked when getting a Key, and if it's
-	// expired, it's deleted and we get nothing back. in this case, the lock
-	// should prevent that from happening, and we should get the Key back
-	assertEqual(t, kvInfo.Locked, true)
-	assertEqual(t, keyInfo.expired, true)
-	_, isLocked := srv.locks[key]
-	assertEqual(t, isLocked, true)
-
-	// a Locked Key should be immune from clearing the store
-	clearResponse, err := client.Clear(ctx, &pb.ClearRequest{})
-	failOnErr(t, err)
-	assertEqual(t, clearResponse.Success, true)
-	assertEqual(t, clearResponse.KeysDeleted, 0)
-
-	// explicitly unlock it... without the right client ID
-	unlockResponse, err := otherClient.Unlock(ctx, &pb.UnlockRequest{Key: key})
-	assertErrorCode(t, status.Code(err), codes.PermissionDenied)
-
-	unlockResponse, err = client.Unlock(
-		ctx,
-		&pb.UnlockRequest{Key: key},
-	)
-	failOnErr(t, err)
-	assertEqual(t, unlockResponse.Success, true)
-	_, isLocked = srv.locks[key]
-	assertEqual(t, isLocked, false)
-	assertEqual(t, keyInfo.expired, true)
-
-	kx.Lifespan = nil
-	kx.LockDuration = nil
-	_, err = client.Set(ctx, kx)
-	failOnErr(t, err)
-	// clearing the store should now delete the expired, unlocked Key
-	clearResponse, err = client.Clear(ctx, &pb.ClearRequest{})
-	failOnErr(t, err)
-	assertEqual(t, clearResponse.Success, true)
-	assertEqual(t, clearResponse.KeysDeleted, 1)
-
-	// verify it was removed from the store
-	_, ok = srv.store[key]
-	assertEqual(t, ok, false)
+	kvInfo, err = client.Inspect(ctx, &pb.InspectRequest{Key: pk.Key})
+	assertErrorCode(t, status.Code(err), codes.NotFound)
 }
 
 func TestPopUnknownKey(t *testing.T) {
@@ -1211,6 +1364,389 @@ func TestReadLockedKey(t *testing.T) {
 	}
 }
 
+func TestKeyMetrics(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.LogLevel = "DEBUG"
+	cfg.LogEvents = true
+	srv, lis := newServer(t, nil, cfg)
+	client := newClient(t, srv, lis, "")
+
+	var waitTimer *time.Timer
+
+	key := "foo"
+	var err error
+	var km *pb.KeyMetric
+
+	setSeen := make(chan struct{}, 2)
+	getSeen := make(chan struct{}, 2)
+	deleteSeen := make(chan struct{}, 1)
+	lockSeen := make(chan struct{}, 1)
+
+	eventCh, err := srv.Subscribe(ctx, "test_watcher", nil, nil)
+	fatalOnErr(t, err)
+
+	go func() {
+		for ev := range eventCh {
+			t.Logf("saw event: %+v (%d)", ev, ev.Time.UnixNano())
+			if ctx.Err() != nil {
+				return
+			}
+			if ev.Key != key {
+				continue
+			}
+			switch ev.Event {
+			case Created, Updated:
+				setSeen <- struct{}{}
+			case Accessed:
+				getSeen <- struct{}{}
+			case Deleted:
+				deleteSeen <- struct{}{}
+			case Locked:
+				lockSeen <- struct{}{}
+			}
+		}
+	}()
+
+	// set the value, validate set count=1, everything else is zero
+	_, err = client.Set(ctx, &pb.KeyValue{Key: key, Value: []byte("bar")})
+	fatalOnErr(t, err)
+	waitTimer = time.NewTimer(10 * time.Second)
+	select {
+	case <-setSeen:
+	//
+	case <-waitTimer.C:
+		t.Fatalf("timed out waiting for set event")
+	}
+	mq := &pb.KeyMetricRequest{Key: key}
+	km, err = client.GetKeyMetric(ctx, mq)
+	fatalOnErr(t, err)
+
+	assertEqual(t, km.SetCount, 1)
+	assertEqual(t, km.FirstSet.Seconds > 0, true)
+	assertEqual(
+		t,
+		km.FirstSet.AsTime().UnixNano(),
+		km.LastSet.AsTime().UnixNano(),
+	)
+
+	assertEqual(t, km.AccessCount, 0)
+	assertEqual(t, km.FirstAccessed, nil)
+
+	assertEqual(t, km.LastAccessed, km.FirstAccessed)
+
+	assertEqual(t, km.LockCount, 0)
+	assertEqual(t, km.FirstLocked, nil)
+	assertEqual(t, km.FirstLocked, km.LastLocked)
+
+	time.Sleep(1500 * time.Millisecond)
+
+	// inspecting the key with IncludeValue should increment the access counter
+	// to 1
+	_, err = client.Inspect(
+		ctx,
+		&pb.InspectRequest{Key: key, IncludeValue: true},
+	)
+
+	waitTimer = time.NewTimer(10 * time.Second)
+	select {
+	case <-getSeen:
+	//
+	case <-waitTimer.C:
+		t.Fatalf("timed out waiting for get event")
+	}
+
+	km, err = client.GetKeyMetric(ctx, mq)
+	fatalOnErr(t, err)
+
+	assertEqual(t, km.SetCount, 1)
+	assertEqual(t, km.FirstSet.Seconds > 0, true)
+	assertEqual(t, km.FirstSet.Seconds, km.LastSet.Seconds)
+
+	assertEqual(t, km.AccessCount, 1)
+	assertEqual(t, km.FirstAccessed.Seconds > 0, true)
+	assertEqual(
+		t,
+		km.LastAccessed.AsTime().UnixNano(),
+		km.FirstAccessed.AsTime().UnixNano(),
+	)
+	firstMetric := km
+
+	// Getting it should also increment the access counter, to 2
+	time.Sleep(1500 * time.Millisecond)
+	_, err = client.Get(ctx, &pb.Key{Key: key})
+	fatalOnErr(t, err)
+
+	waitTimer = time.NewTimer(10 * time.Second)
+	select {
+	case <-getSeen:
+	//
+	case <-waitTimer.C:
+		t.Fatalf("timed out waiting for get event")
+	}
+
+	km, err = client.GetKeyMetric(ctx, mq)
+	fatalOnErr(t, err)
+
+	assertEqual(t, km.SetCount, 1)
+	assertEqual(t, km.FirstSet.Seconds > 0, true)
+	assertEqual(t, km.FirstSet.Seconds, km.LastSet.Seconds)
+
+	assertEqual(t, km.AccessCount, 2)
+	assertEqual(t, km.FirstAccessed.Seconds > 0, true)
+	firstAccess := km.FirstAccessed.AsTime().UnixNano()
+	lastAccess := km.LastAccessed.AsTime().UnixNano()
+	prevMetric := km
+	if firstAccess >= lastAccess {
+		t.Fatalf(
+			"firstAccess >= lastAccess: %d >= %d (%d) \n%s\n%s",
+			firstAccess,
+			lastAccess,
+			firstAccess-lastAccess,
+			firstMetric.String(),
+			km.String(),
+		)
+	}
+
+	// Deleting it shouldn't clear the metrics
+	_, err = client.Delete(ctx, &pb.DeleteRequest{Key: key})
+	fatalOnErr(t, err)
+
+	waitTimer = time.NewTimer(10 * time.Second)
+	select {
+	case <-deleteSeen:
+	//
+	case <-waitTimer.C:
+		t.Fatalf("timed out waiting for delete event")
+	}
+
+	km, err = client.GetKeyMetric(ctx, mq)
+	fatalOnErr(t, err)
+
+	assertEqual(t, km.SetCount, 1)
+	assertEqual(t, km.FirstSet.Seconds > 0, true)
+	assertEqual(
+		t,
+		km.FirstSet.AsTime().UnixNano(),
+		km.LastSet.AsTime().UnixNano(),
+	)
+
+	assertEqual(t, km.AccessCount, 2)
+	assertEqual(t, km.FirstAccessed.Seconds > 0, true)
+	assertEqual(
+		t,
+		km.LastAccessed.AsTime().UnixNano(),
+		lastAccess,
+		fmt.Sprintf(
+			"access times should match (%d)",
+			km.LastAccessed.AsTime().UnixNano()-lastAccess,
+		),
+		fmt.Sprintf("%s\n%s", prevMetric.String(), km.String()),
+	)
+
+	// Increment the set counter
+	time.Sleep(1500 * time.Millisecond)
+	_, err = client.Set(ctx, &pb.KeyValue{Key: key, Value: []byte("baz")})
+	fatalOnErr(t, err)
+
+	waitTimer = time.NewTimer(10 * time.Second)
+	select {
+	case <-setSeen:
+	//
+	case <-waitTimer.C:
+		t.Fatalf("timed out waiting for set event")
+	}
+
+	km, err = client.GetKeyMetric(ctx, mq)
+	fatalOnErr(t, err)
+
+	assertEqual(t, km.SetCount, 2)
+	assertEqual(t, km.FirstSet.Seconds > 0, true)
+	if km.FirstSet.AsTime().UnixNano() >= km.LastSet.AsTime().UnixNano() {
+		t.Errorf(
+			"firstSet >= lastSet: %d >= %d",
+			km.FirstSet.AsTime().UnixNano(),
+			km.LastSet.AsTime().UnixNano(),
+		)
+	}
+
+	assertEqual(t, km.AccessCount, 2)
+	assertEqual(t, km.FirstAccessed.Seconds > 0, true)
+	assertEqual(t, km.LastAccessed.AsTime().UnixNano(), lastAccess)
+
+	firstSet := km.FirstSet.AsTime().UnixNano()
+	lastSet := km.LastSet.AsTime().UnixNano()
+	if firstSet >= lastSet {
+		t.Errorf("firstSet >= lastSet: %d >= %d", firstSet, lastSet)
+	}
+
+	// Increment the lock counter
+	_, err = client.Lock(
+		ctx,
+		&pb.LockRequest{Key: key, Duration: durationpb.New(10 * time.Second)},
+	)
+	fatalOnErr(t, err)
+
+	waitTimer = time.NewTimer(10 * time.Second)
+	select {
+	case <-lockSeen:
+	//
+	case <-waitTimer.C:
+		t.Fatalf("timed out waiting for lock event")
+	}
+
+	km, err = client.GetKeyMetric(ctx, mq)
+	fatalOnErr(t, err)
+
+	assertEqual(t, km.SetCount, 2)
+	assertEqual(t, km.FirstSet.Seconds > 0, true)
+
+	assertEqual(t, km.LastSet.AsTime().UnixNano(), lastSet)
+
+	assertEqual(t, km.AccessCount, 2)
+	assertEqual(t, km.FirstAccessed.Seconds > 0, true)
+	assertEqual(t, km.LastAccessed.AsTime().UnixNano(), lastAccess)
+
+	assertEqual(t, km.LockCount, 1)
+	assertEqual(t, km.FirstLocked.Seconds > 0, true)
+	assertEqual(
+		t,
+		km.LastLocked.Seconds,
+		km.FirstLocked.Seconds,
+	)
+}
+
+func TestSubscriberLimit(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EventStreamSubscriberLimit = 3
+	srv, lis := newServer(t, nil, cfg)
+
+	srv.cfgMu.RLock()
+	assertEqual(t, srv.cfg.EventStreamSubscriberLimit, 3)
+	srv.cfgMu.RUnlock()
+
+	clientX := newClient(t, srv, lis, "x")
+	clientY := newClient(t, srv, lis, "y")
+	clientZ := newClient(t, srv, lis, "z")
+	clientOver := newClient(t, srv, lis, "over")
+	t.Cleanup(
+		func() {
+			_ = clientX.CloseConnection()
+			_ = clientY.CloseConnection()
+			_ = clientZ.CloseConnection()
+			_ = clientOver.CloseConnection()
+		},
+	)
+
+	var err error
+
+	xResult := make(chan *pb.Event, 1)
+	yResult := make(chan *pb.Event, 1)
+	zResult := make(chan *pb.Event, 1)
+
+	_, err = clientX.Set(ctx, &pb.KeyValue{Key: "foo", Value: []byte("bar")})
+	fatalOnErr(t, err)
+
+	// Client X
+	xWatch, err := clientX.WatchStream(
+		ctx,
+		&pb.WatchRequest{Keys: []string{}},
+	)
+	fatalOnErr(t, err)
+
+	go func() {
+		xr, xe := xWatch.Recv()
+		fatalOnErr(t, xe)
+		t.Logf("got X result %v", xr)
+		xResult <- xr
+		return
+	}()
+
+	// Client Y
+	yWatch, err := clientY.WatchStream(
+		ctx,
+		&pb.WatchRequest{Keys: []string{}},
+	)
+	fatalOnErr(t, err)
+
+	go func() {
+		yr, ye := yWatch.Recv()
+		fatalOnErr(t, ye)
+		t.Logf("got Y result %v", yr)
+		yResult <- yr
+		return
+	}()
+
+	// Client Z
+	zWatch, err := clientZ.WatchStream(
+		ctx,
+		&pb.WatchRequest{Keys: []string{}},
+	)
+	fatalOnErr(t, err)
+
+	go func() {
+		zr, ze := zWatch.Recv()
+		fatalOnErr(t, ze)
+		t.Logf("got Z result %v", zr)
+		zResult <- zr
+		return
+	}()
+
+	rctx, rcancel := context.WithTimeout(ctx, 60*time.Second)
+
+	allDone := make(chan struct{}, 1)
+
+	for {
+		if rctx.Err() != nil {
+			break
+		}
+		if srv.numEventSubscribers.Load() >= 3 {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	go func() {
+		defer rcancel()
+		_, overErr := clientOver.Set(
+			ctx,
+			&pb.KeyValue{Key: "foo", Value: []byte("baz")},
+		)
+		fatalOnErr(t, overErr)
+		<-xResult
+		t.Logf("got x")
+		<-yResult
+		t.Logf("got y")
+		<-zResult
+		t.Logf("got z")
+		allDone <- struct{}{}
+		return
+	}()
+
+	select {
+	case <-allDone:
+		t.Logf("all watchers reported")
+	case <-rctx.Done():
+		if errors.Is(rctx.Err(), context.DeadlineExceeded) {
+			t.Fatalf("timed out waiting for all events")
+		}
+	}
+
+	assertEqual(t, srv.numEventSubscribers.Load(), 3)
+
+	// 1 over limit
+	// apparently with a stream, the error returned by the server is not
+	// the second return value here, but the error returned by Recv()
+	finalStream, finalErr := clientOver.WatchStream(
+		ctx,
+		&pb.WatchRequest{Keys: []string{}},
+	)
+	fatalOnErr(t, finalErr)
+
+	m, me := finalStream.Recv()
+	assertEqual(t, m, nil)
+	assertNotNil(t, me)
+	assertErrorCode(t, status.Code(me), codes.ResourceExhausted)
+}
+
 func TestKeyValueStore(t *testing.T) {
 	srv, lis := newServer(t, nil, nil)
 	client := newClient(t, srv, lis, "")
@@ -1239,7 +1775,7 @@ func TestKeyValueStore(t *testing.T) {
 	failOnErr(t, err)
 	assertSlicesEqual(t, resp.Value, value)
 
-	kvInfo, err := client.GetKeyInfo(ctx, &pb.Key{Key: key})
+	kvInfo, err := client.Inspect(ctx, &pb.InspectRequest{Key: key})
 	failOnErr(t, err)
 	assertEqual(t, srv.numKeys.Load(), 1+startKeyCt)
 	assertEqual(t, kvInfo.Version, 1) // first version
@@ -1247,7 +1783,7 @@ func TestKeyValueStore(t *testing.T) {
 
 	// Value should've been hashed
 	originalHash := kvInfo.Hash
-	assertNotEqual(t, originalHash, "")
+	assertNotEqual(t, originalHash, 0)
 
 	// Created timestamp should've been populated
 	created := kvInfo.Created.AsTime()
@@ -1273,7 +1809,7 @@ func TestKeyValueStore(t *testing.T) {
 	sk.mu.RUnlock()
 	srv.mu.RUnlock()
 
-	kvInfo, err = client.GetKeyInfo(ctx, &pb.Key{Key: key})
+	kvInfo, err = client.Inspect(ctx, &pb.InspectRequest{Key: key})
 	failOnErr(t, err)
 	assertEqual(t, kvInfo.Version, 2)                    // second version
 	assertNotEqual(t, kvInfo.Updated.AsTime().Unix(), 0) // should've been set
@@ -1284,7 +1820,7 @@ func TestKeyValueStore(t *testing.T) {
 	)
 	assertEqual(t, kvInfo.Size, secondSize)
 	assertNotEqual(t, originalHash, kvInfo.Hash)
-	assertNotEqual(t, kvInfo.Hash, "")
+	assertNotEqual(t, kvInfo.Hash, 0)
 
 	updated := kvInfo.Updated.AsTime()
 	assertEqual(t, updated.IsZero(), false)
@@ -1340,7 +1876,7 @@ func TestDetectContentType(t *testing.T) {
 	_, err := client.Set(ctx, k)
 	failOnErr(t, err)
 
-	keyInfo, err := client.GetKeyInfo(ctx, &pb.Key{Key: k.Key})
+	keyInfo, err := client.Inspect(ctx, &pb.InspectRequest{Key: k.Key})
 	failOnErr(t, err)
 	assertEqual(t, keyInfo.ContentType, "image/png")
 }
@@ -1348,7 +1884,8 @@ func TestDetectContentType(t *testing.T) {
 func TestGetVersion(t *testing.T) {
 	srv, lis := newServer(t, nil, nil)
 	client := newClient(t, srv, lis, "")
-	// Set initial value 'bar'
+
+	// Set initial value 'bar', version 1
 	initialValue := []byte("bar")
 	k := &pb.KeyValue{Key: "foo", Value: initialValue}
 	_, err := client.Set(ctx, k)
@@ -1389,51 +1926,15 @@ func TestGetVersion(t *testing.T) {
 
 }
 
-func getGoLogo(t *testing.T) []byte {
-	t.Helper()
-	f := filepath.Join("testdata", "go.png")
-	file, err := os.ReadFile(f)
-	if err != nil {
-		t.Fatalf("unable to read file: %s: %s", f, err.Error())
-	}
-	return file
-}
-
-func TestRestoreExistingFile(t *testing.T) {
-	tempServer, err := NewServer(&Config{})
-	failOnErr(t, err)
-	assertEqual(t, len(tempServer.store), 0)
-
-	f := filepath.Join("testdata", "restore.json")
-	file, err := os.ReadFile(f)
-	failOnErr(t, err)
-
-	ct, err := tempServer.Restore(file)
-	failOnErr(t, err)
-	assertEqual(t, ct, 2)
-
-	assertEqual(t, len(tempServer.store), 2)
-	fmt.Printf("%#v\n", tempServer.store)
-
-	kv := tempServer.store["foo"]
-	assertSlicesEqual(t, kv.Value, []byte("bar"))
-
-	kv = tempServer.store["bar"]
-	assertSlicesEqual(t, kv.Value, []byte("baz"))
-
-	assertEqual(t, tempServer.store["baz"], nil)
-
-}
-
 func TestEvents(t *testing.T) {
 	srv, lis := newServer(t, nil, nil)
 	client := newClient(t, srv, lis, "")
 
-	x, err := srv.Subscribe("x")
+	x, err := srv.Subscribe(ctx, "x", []string{"foo"}, nil)
 	failOnErr(t, err)
-	y, err := srv.Subscribe("y")
+	y, err := srv.Subscribe(ctx, "y", []string{"foo"}, nil)
 	failOnErr(t, err)
-	z, err := srv.Subscribe("z")
+	z, err := srv.Subscribe(ctx, "z", []string{"foo"}, nil)
 	failOnErr(t, err)
 
 	xResults := make([]Event, 0, 5)
@@ -1554,101 +2055,6 @@ func TestEvents(t *testing.T) {
 
 }
 
-func TestSnapshot(t *testing.T) {
-	tmpdir := t.TempDir()
-	d := time.Duration(0)
-
-	cfg := DefaultConfig()
-	cfg.Snapshot.Dir = tmpdir
-	cfg.Snapshot.Interval = d
-	cfg.Snapshot.Limit = 1
-
-	srv, lis := newServer(t, nil, cfg)
-	client := newClient(t, srv, lis, "")
-	kv := &pb.KeyValue{Key: "foo", Value: []byte("bar")}
-	_, err := client.Set(ctx, kv)
-	failOnErr(t, err)
-
-	snapshotter, err := NewSnapshotter(srv)
-	failOnErr(t, err)
-
-	filename, err := snapshotter.Snapshot()
-	failOnErr(t, err)
-
-	assertEqual(t, snapshotter.lastSnapshot, filename)
-
-	tmpServer, err := NewServer(&Config{})
-	failOnErr(t, err)
-	file, err := os.Open(filename)
-	failOnErr(t, err)
-	defer file.Close()
-
-	reader, err := gzip.NewReader(file)
-	failOnErr(t, err)
-	defer reader.Close()
-
-	data, err := io.ReadAll(reader)
-
-	failOnErr(t, err)
-	err = json.Unmarshal(data, tmpServer)
-	failOnErr(t, err)
-
-	assertEqual(t, len(tmpServer.store), 1)
-	assertSlicesEqual(t, tmpServer.store[kv.Key].Value, kv.Value)
-}
-
-func TestEncryptedSnapshot(t *testing.T) {
-	tmpdir := t.TempDir()
-	d := time.Duration(0)
-
-	cfg := DefaultConfig()
-	cfg.Snapshot.Enabled = true
-	cfg.Snapshot.Dir = tmpdir
-	cfg.Snapshot.Limit = 1
-	cfg.Snapshot.Encrypt = true
-	secretKey := "qwertyuiopasdfgh"
-	cfg.Snapshot.SecretKey = secretKey
-	cfg.Snapshot.Interval = d
-
-	srv, lis := newServer(t, nil, cfg)
-	client := newClient(t, srv, lis, "")
-	kv := &pb.KeyValue{Key: "foo", Value: []byte("bar")}
-	_, err := client.Set(ctx, kv)
-	failOnErr(t, err)
-
-	snapshotter, err := NewSnapshotter(srv)
-	failOnErr(t, err)
-
-	filename, err := snapshotter.EncryptedSnapshot()
-	failOnErr(t, err)
-	fileDir := filepath.Dir(filename)
-	assertEqual(t, fileDir, tmpdir)
-
-	assertEqual(t, snapshotter.lastSnapshot, filename)
-
-	tmpServer, err := NewServer(&Config{})
-	failOnErr(t, err)
-	file, err := os.Open(filename)
-	failOnErr(t, err)
-	defer file.Close()
-
-	reader, err := gzip.NewReader(file)
-	failOnErr(t, err)
-	defer reader.Close()
-
-	data, err := io.ReadAll(reader)
-	failOnErr(t, err)
-
-	decryptedData, err := decrypt(secretKey, data)
-	failOnErr(t, err)
-
-	err = json.Unmarshal(decryptedData, tmpServer)
-	failOnErr(t, err)
-
-	assertEqual(t, len(tmpServer.store), 1)
-	assertSlicesEqual(t, tmpServer.store[kv.Key].Value, kv.Value)
-}
-
 func TestMarshal(t *testing.T) {
 	srv, lis := newServer(t, nil, nil)
 	client := newClient(t, srv, lis, "")
@@ -1675,7 +2081,7 @@ func TestMarshal(t *testing.T) {
 	t.Logf("data:\n%s", data)
 
 	// Create a separate server, unmarshal the first server's data into it
-	newStore, err := NewServer(&Config{HashAlgorithm: crypto.MD5})
+	newStore, err := NewServer(&Config{})
 	fatalOnErr(t, err)
 	t.Logf("unmarshaling to new store")
 	newStore.mu.Lock()
@@ -1697,7 +2103,6 @@ func TestMarshal(t *testing.T) {
 	assertNotNil(t, newStore.logger)
 
 	for keyName, keyInfo := range srv.store {
-
 		t.Logf("checking key: %s", keyName)
 		otherKeyInfo := newStore.store[keyName]
 		if strings.HasPrefix(keyName, reservedPrefix) {
@@ -1708,7 +2113,6 @@ func TestMarshal(t *testing.T) {
 		}
 		if otherKeyInfo == nil {
 			t.Fatalf("key %s not found in new store", keyName)
-			continue
 		}
 		assertSlicesEqual(t, keyInfo.Value, otherKeyInfo.Value)
 		assertEqual(t, keyInfo.Hash, otherKeyInfo.Hash)
@@ -1723,42 +2127,111 @@ func TestMarshal(t *testing.T) {
 			fmt.Sprintf("Lock data: %+v", firstLock),
 			fmt.Sprintf("other lock data: %+v", otherLock),
 		)
+
+		firstStats, hasStat := srv.keyStats[keyName]
+		assertEqual(t, hasStat, true)
+
+		otherStats, hasStat := newStore.keyStats[keyName]
+		assertEqual(t, hasStat, true)
+
+		assertEqual(t, firstStats.AccessCount, otherStats.AccessCount)
+		assertEqual(t, firstStats.LockCount, otherStats.LockCount)
+		assertEqual(t, firstStats.SetCount, otherStats.SetCount)
+		assertTimesEqual(
+			t,
+			firstStats.FirstAccessed,
+			otherStats.FirstAccessed,
+		)
+		assertTimesEqual(t, firstStats.FirstLocked, otherStats.FirstLocked)
+		assertTimesEqual(t, firstStats.FirstSet, otherStats.FirstSet)
+		assertTimesEqual(t, firstStats.LastAccessed, otherStats.LastAccessed)
+		assertTimesEqual(t, firstStats.LastLocked, otherStats.LastLocked)
+		assertTimesEqual(t, firstStats.LastSet, otherStats.LastSet)
+
 	}
 }
 
-func TestDump(t *testing.T) {
-	dir := t.TempDir()
-	targetFile := "backup.json"
-	targetPath := filepath.Join(dir, targetFile)
+func assertTimesEqual(t *testing.T, t1 *time.Time, expected *time.Time) {
+	t.Helper()
+	if t1 == nil && expected == nil {
+		return
+	}
+	if t1 == nil && expected != nil {
+		t.Fatalf("expected '%s', got nil", expected)
+	}
+	if t1 != nil && expected == nil {
+		t.Fatalf("expected nil, got '%s'", t1)
+	}
+	pt1 := *t1
+	pexpect := *expected
+	if !pt1.Equal(pexpect) {
+		t.Errorf("expected '%s', got '%s;", expected, t1)
+	}
+}
 
-	srv, lis := newServer(t, nil, nil)
+func TestGetRevision(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RevisionLimit = 10
+
+	srv, lis := newServer(t, nil, cfg)
 	client := newClient(t, srv, lis, "")
-	kv := &pb.KeyValue{Key: "foo", Value: []byte("bar")}
+
+	key := "foo"
+
+	revisions := map[int]*pb.KeyValue{}
+
+	for i := 1; i < int(cfg.RevisionLimit+2); i++ {
+		kv := &pb.KeyValue{Key: key, Value: []byte(fmt.Sprintf("bar-%d", i))}
+		_, err := client.Set(ctx, kv)
+		fatalOnErr(t, err)
+	}
+
+	_, e := client.GetRevision(
+		ctx,
+		&pb.GetRevisionRequest{Key: key, Version: 0},
+	)
+	if e == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	assertErrorCode(t, status.Code(e), codes.InvalidArgument)
+
+	for rev, k := range revisions {
+		resp, err := client.GetRevision(
+			ctx,
+			&pb.GetRevisionRequest{Key: key, Version: int64(rev)},
+		)
+		fatalOnErr(t, err)
+		assertSlicesEqual(t, resp.Value, k.Value)
+	}
+
+	kv := &pb.KeyValue{Key: key, Value: []byte("bar-final")}
 	_, err := client.Set(ctx, kv)
-	failOnErr(t, err)
+	fatalOnErr(t, err)
+	_, err = client.GetRevision(
+		ctx,
+		&pb.GetRevisionRequest{Key: key, Version: 1},
+	)
+	if err == nil {
+		srv.mu.RLock()
+		kvInfo := srv.store[key]
+		srv.mu.RUnlock()
+		kvInfo.mu.RLock()
+		currentVersion := kvInfo.Version
+		revs := kvInfo.History.Length()
+		allVersions := []string{}
+		for _, v := range kvInfo.History.List() {
+			allVersions = append(allVersions, fmt.Sprintf("%d", v.Version))
+		}
+		kvInfo.mu.RUnlock()
+		t.Fatalf(
+			"expected error, got nil (current version: %d, history length: %d, all versions: %s)",
+			currentVersion,
+			revs,
+			strings.Join(allVersions, ", "),
+		)
+	}
+	assertErrorCode(t, status.Code(err), codes.NotFound)
 
-	err = srv.Dump(targetPath)
-	failOnErr(t, err)
-
-	data, err := os.ReadFile(targetPath)
-	failOnErr(t, err)
-
-	_, err = client.Set(ctx, &pb.KeyValue{Key: "bar", Value: []byte("baz")})
-	failOnErr(t, err)
-
-	ct, err := srv.Restore(data)
-	failOnErr(t, err)
-	assertEqual(t, ct, 1)
-
-	val, err := client.Get(ctx, &pb.Key{Key: "foo"})
-	failOnErr(t, err)
-	assertSlicesEqual(t, val.Value, []byte("bar"))
-
-	_, err = client.Get(ctx, &pb.Key{Key: "bar"})
-	assertNotNil(t, err)
-	e, ok := status.FromError(err)
-	assertEqual(t, ok, true)
-	assertErrorCode(t, e.Code(), codes.NotFound)
 }
 
 func TestMaxValueSize(t *testing.T) {
@@ -1799,14 +2272,21 @@ func TestMaxValueSize(t *testing.T) {
 // failOnErr is a helper function that takes the result of a function that
 // only has 1 return value (error), and fails the test if the error is not nil.
 // It's intended to reduce boilerplate code in tests.
-func failOnErr(t *testing.T, err error) {
+func failOnErr(t testing.TB, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
 }
 
-func assertEqual[V comparable](t *testing.T, val V, expected V, msg ...string) {
+func fatalOnErr(t testing.TB, err error, msg ...string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("error: %s / %s", err.Error(), strings.Join(msg, " ... "))
+	}
+}
+
+func assertEqual[V comparable](t testing.TB, val V, expected V, msg ...string) {
 	t.Helper()
 	if val != expected {
 		t.Fatalf(
@@ -1829,7 +2309,7 @@ func assertLessThanOrEqualTo[V ~int | ~float64 | ~uint | ~int64](
 	}
 }
 
-func assertNotEqual[V comparable](t *testing.T, val V, expected V) {
+func assertNotEqual[V comparable](t testing.TB, val V, expected V) {
 	t.Helper()
 	if val == expected {
 		t.Errorf(
@@ -1840,7 +2320,7 @@ func assertNotEqual[V comparable](t *testing.T, val V, expected V) {
 	}
 }
 
-func assertSlicesEqual[V comparable](t *testing.T, value []V, expected []V) {
+func assertSlicesEqual[V comparable](t testing.TB, value []V, expected []V) {
 	t.Helper()
 	if len(value) != len(expected) {
 		t.Fatalf(
@@ -1865,7 +2345,7 @@ func assertSlicesEqual[V comparable](t *testing.T, value []V, expected []V) {
 }
 
 func requireSliceContains[V comparable](
-	t *testing.T,
+	t testing.TB,
 	value []V,
 	expected ...V,
 ) {
@@ -1889,7 +2369,7 @@ func requireSliceContains[V comparable](
 	}
 }
 
-func assertSliceContains[V comparable](t *testing.T, value []V, expected ...V) {
+func assertSliceContains[V comparable](t testing.TB, value []V, expected ...V) {
 	t.Helper()
 	found := map[V]bool{}
 	if len(expected) == 0 {
@@ -1911,7 +2391,7 @@ func assertSliceContains[V comparable](t *testing.T, value []V, expected ...V) {
 }
 
 func assertSliceContainsOneOf[V comparable](
-	t *testing.T,
+	t testing.TB,
 	value []V,
 	expected ...V,
 ) {
@@ -1934,7 +2414,7 @@ func assertSliceContainsOneOf[V comparable](
 }
 
 func assertErrorCode(
-	t *testing.T,
+	t testing.TB,
 	code codes.Code,
 	expectedCode codes.Code,
 	msg ...string,
@@ -1950,10 +2430,70 @@ func assertErrorCode(
 	}
 }
 
-func assertNotNil(t *testing.T, v any) {
+func getGoLogo(t testing.TB) []byte {
+	t.Helper()
+	f := filepath.Join("testdata", "go.png")
+	file, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatalf("unable to read file: %s: %s", f, err.Error())
+	}
+	return file
+}
+
+func assertNotNil(t testing.TB, v any) {
 	t.Helper()
 	if v == nil {
 		t.Fatalf("expected non-nil value")
 
 	}
+}
+
+func BenchmarkSetKey(b *testing.B) {
+	srv, lis := newServer(b, nil, nil)
+	client := newClient(b, srv, lis, "")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := client.Set(
+			ctx,
+			&pb.KeyValue{Key: fmt.Sprintf("foo-%d", i), Value: []byte("bar")},
+		)
+		fatalOnErr(b, err)
+	}
+}
+
+func BenchmarkLockKey(b *testing.B) {
+	srv, lis := newServer(b, nil, nil)
+	client := newClient(b, srv, lis, "")
+
+	for i := 0; i < b.N; i++ {
+		_, err := client.Set(
+			ctx,
+			&pb.KeyValue{Key: fmt.Sprintf("foo-%d", i), Value: []byte("bar")},
+		)
+		fatalOnErr(b, err)
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err := client.Lock(
+			ctx,
+			&pb.LockRequest{
+				Key:      fmt.Sprintf("foo-%d", i),
+				Duration: durationpb.New(10 * time.Second),
+			},
+		)
+		fatalOnErr(b, err)
+	}
+}
+
+func TestGetServerMetric(t *testing.T) {
+	srv, lis := newServer(t, nil, nil)
+	_ = newClient(t, srv, lis, "")
+	m := srv.GetStats()
+	assertNotNil(t, m)
+
+	data, err := json.Marshal(m)
+	fatalOnErr(t, err)
+	t.Logf("stats: %s", string(data))
 }

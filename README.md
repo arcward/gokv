@@ -17,7 +17,7 @@ By default, the server listens on `localhost:33969`, without TLS:
 
 ```shell
 $ ./dist/bin/keyquarry server
-time=2023-11-26T15:13:50.083-05:00 level=INFO msg="starting server" address=:33969 config.HashValues=false config.ssl-certfile="" config.ssl-keyfile="" config.backup="" config.MaxNumberOfKeys=0 config.DefaultMaxValueSize=1000000 config.History.RevisionLimit=5
+time=2023-11-26T15:13:50.083-05:00 level=INFO msg="starting server" address=:33969 config.ssl-certfile="" config.ssl-keyfile="" config.backup="" config.MaxNumberOfKeys=0 config.DefaultMaxValueSize=1000000 config.History.RevisionLimit=5
 ```
 
 Alternatively, you can specify a unix socket like:
@@ -62,7 +62,7 @@ Get metadata for `foo`, indenting the output with two spaces:
 $ ./dist/bin/keyquarry client --indent=2 info foo
 {
   "key":"foo",
-  "hash":"626172d41d8cd98f00b204e9800998ecf8427e",
+  "hash":16101355973854746,
   "created":{"seconds":1704058237,"nanos":591124661},
   "version":1,
   "size":3,
@@ -70,11 +70,8 @@ $ ./dist/bin/keyquarry client --indent=2 info foo
   }
 ```
 
-Note: `version` is incremented whenever the value of a key is updated. If
-`--hash-algorithm` is specified (ex: `--hash-algorithm=MD5`), then the hash
-of the value will be used to determine whether or not to increment the version.
-If values aren't hashed, then the version will be incremented whether or not
-the new value is different from the old value.
+Note: `version` is incremented whenever the value of a key is updated, based
+on the hash of the value.
 
 Lock `foo`, fail to update its value, then unlock and delete `foo`:
 
@@ -96,34 +93,21 @@ or get/set the value.
 
 ### Backup/restore
 
-When the server is run with the `--snapshot-dir` flag, on shutdown, it will
-attempt to write a gzipped JSON file to the directory specified by the flag,
-with all current key-value pairs. On startup, it will look for the most
-recent snapshot file based on filename (named 
-like `{unix-timestamp}.json.gz`), and attempt to restore from
-that file. Example:
+You can persist the current state of the server to a SQLite or Postgres
+database. First, set `KEYQUARRY_SNAPSHOT_ENABLED=true`.
 
-```shell
-$ ./dist/bin/keyquarry server --snapshot-dir ./snapshots --snapshot-interval=5m
-```
+Set  `KEYQUARRY_SNAPSHOT_DATABASE` environment  variable to your connection 
+string (ex: `sqlite:///path/to/file.db` or 
+`postgres://user:password@host:port/dbname`).
 
-Snapshots can be enabled with `--snapshot`.
+By default, the server will load this state on start (if any snapshots exist),
+and save its state on shutdown. To disable loading on start, set
+`KEYQUARRY_START_FRESH=true`. To create new snapshots periodically,
+set `KEYQUARRY_SNAPSHOT_INTERVAL` with a duration (ex: `5m`). If no interval
+is specified, a snapshot will only be created on shutdown.
 
-If you specify `--snapshot-interval`, the server will write a snapshot file
-at each interval, in addition to the snapshot file written on shutdown. When
-using this flag, `--snapshot-dir` defaults to the current working directory.
-If you don't specify `--snapshot-interval`, the server will only write a
-snapshot file on shutdown.
-
-Snapshots will only be written if a change is detected (meaning a key has 
-been set, updated or deleted, either by a client or by the server itself via
-expiry). If hashing isn't enabled, any update will be considered a change.
-
-Snapshots can be automatically encrypted with `--encrypt-snapshots`, which
-requires setting `SNAPSHOT.SECRET_KEY` or envvar 
-`KEYQUARRY_SNAPSHOT_SECRET_KEY`.
-
-```shell
+On startup, it will look for the most recent snapshot record based on `KEYQUARRY_NAME` (by 
+default, set as `{user}@{host}`), attempting to restore from that data.
 
 ## Docker
 
@@ -133,34 +117,15 @@ requires setting `SNAPSHOT.SECRET_KEY` or envvar
 $ docker build -t keyquarry:dev .
 ```
 
-### Run the server
+(Or `docker compose build server`)
 
-This will run the server in the foreground, with the backup file
-`/data/backup.json` on the host machine, so that it can be restored
-on startup:
+### Run the server, snapshot DB and jaeger
 
 ```shell
-$ mkdir data
-$ docker run --interactive --tty \  
-    --mount type=bind,source=${PWD}/data,target=/data \
-    --publish 33969:33969 \
-     keyquarry:dev server --load-snapshot=/data/backup.json.gz
+$ docker compose up -d
 ```
 
-To use TLS/SSL with local files `cert.crt` and `cert.key` under `data/ssl`:
+The compose file enables telemetry by default (`KEYQUARRY_TRACE=true`), and traces
+can be viewed in jaeger at `http://localhost:16686`
 
-```shell
-$ docker run --interactive --tty \
-    --env keyquarry_SERVER_SSL_CERTFILE=/data/ssl/cert.crt \
-    --env keyquarry_SERVER_SSL_KEYFILE=/data/ssl/cert.key \
-    --mount type=bind,source=${PWD}/data/ssl,target=/data/ssl \
-    --publish 33969:33969 \
-     keyquarry:dev server --log-level=DEBUG
-```
-
-```shell
-$ docker run --interactive --tty \
-    --publish 33969:33969 \
-     keyquarry:dev server --log-level=INFO
-
-```
+You can monitor events with the client with `docker compose logs -f client`.

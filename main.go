@@ -19,10 +19,12 @@ func main() {
 		syscall.SIGTERM,
 		syscall.SIGINT,
 	)
+
 	defer func() {
 		signal.Stop(signals)
 		cancel()
 	}()
+
 	go func() {
 		select {
 		case sig := <-signals:

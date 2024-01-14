@@ -30,7 +30,8 @@ var getCmd = &cobra.Command{
 			printError(err)
 			value = kv.Value
 		}
-		fmt.Fprintln(out, string(value))
+		_, err := fmt.Fprintln(out, string(value))
+		printError(err)
 		return nil
 	},
 }
@@ -38,10 +39,12 @@ var getCmd = &cobra.Command{
 func init() {
 	clientCmd.AddCommand(getCmd)
 	opts := &cliOpts
-	getCmd.Flags().Uint64Var(
+	getCmd.Flags().Int64Var(
 		&opts.clientOpts.GetKeyVersion,
 		"revision",
 		0,
-		"Get the value of a key at a specific version (0=current)",
+		"Get the value of a key at a specific version. 0 means latest. "+
+			"A positive number means the version number. A negative number "+
+			"specifies the number of versions back from the latest.",
 	)
 }

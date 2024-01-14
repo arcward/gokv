@@ -3,15 +3,12 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"crypto"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/arcward/keyquarry/client"
 	"github.com/arcward/keyquarry/server"
-	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -19,31 +16,20 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"time"
 )
 
-const (
-	defaultNetwork = "tcp"
-	defaultHost    = "localhost"
-	defaultPort    = 33969
-)
-
 var out io.Writer = os.Stdout
-
-var defaultAddress = fmt.Sprintf(
-	"%s:%d",
-	defaultHost,
-	defaultPort,
-)
 
 type CLIConfig struct {
 	ServerOpts server.Config `json:"server" yaml:"server" mapstructure:"server"`
-
-	ClientOpts client.Config //`json:"client" yaml:"client" mapstructure:"client"`
-
+	// If true, snapshots will be ignored on startup. If snapshots are
+	// enabled, they will still be created.
+	StartFresh          bool `json:"start_fresh" yaml:"start_fresh" mapstructure:"start_fresh"`
+	ClientOpts          client.Config
 	configFile          string
 	clientOpts          clientOptions
 	server              *server.KeyValueStore
@@ -52,170 +38,6 @@ type CLIConfig struct {
 	LogLevel            string `json:"log_level" yaml:"log_level" mapstructure:"log_level"`
 	LogJSON             bool   `json:"log_json" yaml:"log_json" mapstructure:"log_json"`
 	ShowDetailedVersion bool
-	ProfileCPU          bool
-}
-
-func decodeHashType() mapstructure.DecodeHookFuncType {
-	// Wrapped in a function call to add optional input parameters (eg. separator)
-	return func(
-		f reflect.Type, // data type
-		t reflect.Type, // target data type
-		data interface{}, // raw data
-	) (interface{}, error) {
-		// Check if the data type matches the expected one
-
-		if f.Kind() != reflect.String {
-			return data, nil
-		}
-
-		// Check if the target type matches the expected one
-		if t != reflect.TypeOf(crypto.Hash(0)) {
-			return data, nil
-		}
-
-		// Format/decode/parse the data and return the new value
-		hashes := []crypto.Hash{
-			crypto.MD4,
-			crypto.MD5,
-			crypto.SHA1,
-			crypto.SHA224,
-			crypto.SHA256,
-			crypto.SHA384,
-			crypto.SHA512,
-			crypto.MD5SHA1,
-			crypto.RIPEMD160,
-			crypto.SHA3_224,
-			crypto.SHA3_256,
-			crypto.SHA3_384,
-			crypto.SHA3_512,
-			crypto.SHA512_224,
-			crypto.SHA512_256,
-			crypto.BLAKE2s_256,
-			crypto.BLAKE2b_256,
-			crypto.BLAKE2b_384,
-			crypto.BLAKE2b_512,
-		}
-		for _, h := range hashes {
-			if strings.ToUpper(data.(string)) == h.String() {
-				return h, nil
-			}
-		}
-		return crypto.Hash(0), nil
-	}
-}
-
-type hashFlag struct {
-	Value crypto.Hash
-}
-
-func (f *hashFlag) String() string {
-	return f.Value.String()
-}
-
-func (f *hashFlag) Set(s string) error {
-	s = strings.ToUpper(s)
-	val := f.getHash(s)
-	available := []string{}
-	for _, hash := range availableHashes() {
-		available = append(available, hash.String())
-	}
-
-	if s != "" && val == crypto.Hash(0) {
-		return fmt.Errorf(
-			"invalid hash algorithm '%s' (expected one of: %s)",
-			s,
-			strings.Join(available, ", "),
-		)
-	}
-	if !val.Available() {
-		return fmt.Errorf(
-			"hash algorithm '%s' is not available (available: %s)",
-			s,
-			strings.Join(available, ", "),
-		)
-	}
-	f.Value = val
-	return nil
-}
-
-func availableHashes() []crypto.Hash {
-	hashes := []crypto.Hash{
-		crypto.MD4,
-		crypto.MD5,
-		crypto.SHA1,
-		crypto.SHA224,
-		crypto.SHA256,
-		crypto.SHA384,
-		crypto.SHA512,
-		crypto.MD5SHA1,
-		crypto.RIPEMD160,
-		crypto.SHA3_224,
-		crypto.SHA3_256,
-		crypto.SHA3_384,
-		crypto.SHA3_512,
-		crypto.SHA512_224,
-		crypto.SHA512_256,
-		crypto.BLAKE2s_256,
-		crypto.BLAKE2b_256,
-		crypto.BLAKE2b_384,
-		crypto.BLAKE2b_512,
-	}
-	available := []crypto.Hash{}
-	for _, hash := range hashes {
-		if hash.Available() {
-			available = append(available, hash)
-		}
-	}
-	return available
-}
-
-func (f *hashFlag) getHash(s string) crypto.Hash {
-	switch s {
-	case "MD4":
-		return crypto.MD4
-	case "MD5":
-		return crypto.MD5
-	case "SHA-1":
-		return crypto.SHA1
-	case "SHA-224":
-		return crypto.SHA224
-	case "SHA-256":
-		return crypto.SHA256
-	case "SHA-384":
-		return crypto.SHA384
-	case "SHA-512":
-		return crypto.SHA512
-	case "MD5+SHA1":
-		return crypto.MD5SHA1
-	case "RIPEMD-160":
-		return crypto.RIPEMD160
-	case "SHA3-224":
-		return crypto.SHA3_224
-	case "SHA3-256":
-		return crypto.SHA3_256
-	case "SHA3-384":
-		return crypto.SHA3_384
-	case "SHA3-512":
-		return crypto.SHA3_512
-	case "SHA-512/224":
-		return crypto.SHA512_224
-	case "SHA-512/256":
-		return crypto.SHA512_256
-	case "BLAKE2s-256":
-		return crypto.BLAKE2s_256
-	case "BLAKE2b-256":
-		return crypto.BLAKE2b_256
-	case "BLAKE2b-384":
-		return crypto.BLAKE2b_384
-	case "BLAKE2b-512":
-		return crypto.BLAKE2b_512
-	default:
-		return crypto.Hash(0) // Unknown or unsupported hash
-	}
-}
-
-func (f hashFlag) Type() string {
-	return "crypto.Hash"
 }
 
 func getLogLevel(levelName string) (slog.Level, bool) {
@@ -245,16 +67,16 @@ type clientOptions struct {
 		Limit           uint64
 		IncludeReserved bool
 	}
-	GetKeyVersion uint64
-
-	Verbose     bool   `json:"verbose" yaml:"verbose" mapstructure:"verbose"`
-	SSLKeyfile  string `json:"ssl_keyfile" yaml:"ssl_keyfile" mapstructure:"ssl_keyfile"`
-	SSLCertfile string `json:"ssl_certfile" yaml:"ssl_certfile" mapstructure:"ssl_certfile"`
-	Quiet       bool
-	IndentJSON  int
+	InspectIncludeValue   bool
+	InspectIncludeMetrics bool
+	InspectDecodeValue    bool
+	GetKeyVersion         int64
+	Verbose               bool `json:"verbose" yaml:"verbose" mapstructure:"verbose"`
+	Quiet                 bool
+	IndentJSON            int
 }
 
-var cliOpts CLIConfig = CLIConfig{
+var cliOpts = CLIConfig{
 	ServerOpts: *server.DefaultConfig(),
 	ClientOpts: client.DefaultConfig(),
 }
@@ -270,7 +92,6 @@ var rootCmd = &cobra.Command{
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute(ctx context.Context) {
-
 	err := rootCmd.ExecuteContext(ctx)
 
 	if err != nil {
@@ -293,18 +114,18 @@ func parseURL(s string) (*url.URL, error) {
 	if found {
 		host = h
 		if n == "" {
-			network = defaultNetwork
+			network = server.DefaultNetwork
 		} else {
 			network = n
 		}
 	} else {
 		host = n
-		network = defaultNetwork
+		network = server.DefaultNetwork
 	}
 
 	u := &url.URL{Scheme: network, Host: host}
 	if u.Port() == "" && u.Scheme != "unix" {
-		u.Host = fmt.Sprintf("%s:%d", u.Host, defaultPort)
+		u.Host = fmt.Sprintf("%s:%d", u.Host, server.DefaultPort)
 	}
 	return u, nil
 }
@@ -327,13 +148,6 @@ func init() {
 		false,
 		"Log in JSON format",
 	)
-	rootCmd.PersistentFlags().BoolVar(
-		&cliOpts.ProfileCPU,
-		"profile",
-		false,
-		"Profile CPU",
-	)
-
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
 	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
@@ -350,7 +164,7 @@ func initConfig() {
 	)
 	viper.SetDefault(
 		"listen_address",
-		defaultAddress,
+		server.DefaultAddress,
 	)
 
 	e := viper.BindPFlag(
@@ -376,11 +190,11 @@ func initConfig() {
 
 	cobra.CheckErr(
 		viper.BindPFlag(
-			"max_key_size",
-			serverCmd.Flags().Lookup("max-key-size"),
+			"max_key_length",
+			serverCmd.Flags().Lookup("max-key-length"),
 		),
 	)
-	viper.SetDefault("max_key_size", server.DefaultMaxKeySize)
+	viper.SetDefault("max_key_length", server.DefaultMaxKeyLength)
 
 	cobra.CheckErr(
 		viper.BindPFlag(
@@ -412,26 +226,18 @@ func initConfig() {
 		),
 	)
 	viper.SetDefault("log_json", false)
+	viper.SetDefault("log_events", false)
 
-	viper.SetDefault("log_events", true)
-	viper.SetDefault("hash_algorithm", crypto.MD5.String())
+	viper.SetDefault("monitor_address", server.DefaultMonitorAddress)
+	viper.SetDefault("pprof", false)
+	viper.SetDefault("expvar", false)
+	viper.SetDefault("metrics", false)
+	viper.SetDefault("trace", false)
 
-	cobra.CheckErr(
-		viper.BindPFlag(
-			"snapshot.dir",
-			serverCmd.Flags().Lookup("snapshot-dir"),
-		),
+	viper.SetDefault(
+		"graceful_shutdown_timeout",
+		server.DefaultGracefulStopTimeout,
 	)
-	var defaultSnapshotDir string
-	defaultSnapshotDir, _ = os.UserCacheDir()
-	if defaultSnapshotDir != "" {
-		defaultSnapshotDir = filepath.Join(
-			defaultSnapshotDir,
-			"keyquarry",
-			"snapshots",
-		)
-	}
-	viper.SetDefault("snapshot.dir", defaultSnapshotDir)
 
 	cobra.CheckErr(
 		viper.BindPFlag(
@@ -440,23 +246,11 @@ func initConfig() {
 		),
 	)
 	viper.SetDefault("snapshot.interval", "0")
-
-	cobra.CheckErr(
-		viper.BindPFlag(
-			"snapshot.limit",
-			serverCmd.Flags().Lookup("snapshot-limit"),
-		),
+	viper.SetDefault("snapshot.database", "")
+	viper.SetDefault(
+		"snapshot.expire_after",
+		server.DefaultSnapshotExpireAfter.String(),
 	)
-	viper.SetDefault("snapshot.limit", server.DefaultSnapshotLimit)
-	viper.SetDefault("snapshot.secret_key", "")
-
-	cobra.CheckErr(
-		viper.BindPFlag(
-			"snapshot.encrypt",
-			serverCmd.Flags().Lookup("encrypt-snapshots"),
-		),
-	)
-	viper.SetDefault("snapshot.encrypt", true)
 
 	cobra.CheckErr(
 		viper.BindPFlag(
@@ -465,18 +259,43 @@ func initConfig() {
 		),
 	)
 
+	viper.SetDefault("snapshot.database", "")
+	viper.SetDefault("event_stream_subscriber_limit", 0)
+	// service name used in traces
+	viper.SetDefault("service_name", "keyquarry")
 	cobra.CheckErr(
 		viper.BindPFlag(
 			"readonly",
 			serverCmd.Flags().Lookup("readonly"),
 		),
 	)
-	viper.SetDefault("readonly", false)
 
+	var defaultServerName string
+	hostname, _ := os.Hostname()
+	if hostname != "" {
+		defaultServerName = hostname
+	}
+
+	u, _ := user.Current()
+	if u != nil {
+		username := u.Username
+		if username != "" {
+			defaultServerName = fmt.Sprintf(
+				"%s@%s",
+				username,
+				defaultServerName,
+			)
+		}
+	}
+
+	viper.SetDefault("name", defaultServerName)
+	viper.SetDefault("readonly", false)
+	viper.SetDefault("start_fresh", false)
 	viper.SetDefault("max_lock_duration", server.DefaultMaxLockDuration)
 	viper.SetDefault("min_lock_duration", server.DefaultMinLockDuration)
 	viper.SetDefault("min_lifespan", server.DefaultMinExpiry)
-
+	viper.SetDefault("privileged_client_id", "")
+	viper.SetDefault("prune_interval", "0")
 	viper.SetDefault("prune_threshold", server.DefaultPruneThreshold)
 	viper.SetDefault("prune_target", server.DefaultPruneTarget)
 	viper.SetDefault("min_prune_interval", server.MinPruneInterval)
@@ -528,75 +347,11 @@ func initConfig() {
 	}
 
 	cobra.CheckErr(viper.Unmarshal(&cliOpts))
-
+	cobra.CheckErr(viper.Unmarshal(&cliOpts.ServerOpts))
 	if cliOpts.configFile == "" {
 		cliOpts.configFile = viper.ConfigFileUsed()
 	}
 
-}
-
-func bindFlags(cmd *cobra.Command, v *viper.Viper, flagMap map[string]string) {
-	return
-	cmd.Flags().VisitAll(
-		func(f *pflag.Flag) {
-			// Determine the naming convention of the flags when represented in the config file
-			configName := f.Name
-			fmt.Println("checking", configName)
-
-			viperName, exists := flagMap[configName]
-			if f.Changed {
-				fmt.Println(
-					configName,
-					"changed",
-					viperName,
-					f.Value,
-					f.DefValue,
-					exists,
-				)
-			}
-			if exists {
-				if v.IsSet(viperName) {
-					fmt.Println(
-						configName,
-						"is set",
-						viperName,
-						fmt.Sprintf("%#v", v.Get(viperName)),
-					)
-				}
-
-				if !f.Changed && v.IsSet(viperName) {
-					val := v.Get(viperName)
-
-					fmt.Println(
-						"overriding value",
-						f.Name,
-						"from",
-						f.Value,
-						"to",
-						val,
-					)
-					cmd.Flags().Set(f.Name, fmt.Sprintf("%v", val))
-
-				}
-			} else {
-				if !f.Changed && v.IsSet(configName) {
-					val := v.Get(configName)
-					fmt.Println(
-						"overriding value",
-						f.Name,
-						"from",
-						f.Value,
-						"to",
-						val,
-					)
-					cmd.Flags().Set(f.Name, fmt.Sprintf("%v", val))
-				}
-			}
-
-			// Apply the viper config value to the flag when the flag is not set and viper has a value
-
-		},
-	)
 }
 
 func readStdin() ([]string, error) {

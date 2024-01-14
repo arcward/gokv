@@ -15,10 +15,15 @@
       "value": "YmF6",
       "client_id": "test",
       "content_type": "text/plain; charset=utf-8",
-      "hash": "76616c75652d3238d41d8cd98f00b204e9800998ecf8427e",
+      "hash": 0,
       "created": "2020-12-20T15:31:02.601011863-05:00",
       "updated": "0001-01-01T00:00:00Z",
-      "version": 1,
+      "version": 1
+    }
+  ],
+  "reapers": [
+    {
+      "key":  "baz",
       "lifespan": 3600000000000,
       "lifespan_set": "2020-12-20T15:45:02.601011863-05:00"
     }

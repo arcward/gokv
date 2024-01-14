@@ -22,18 +22,25 @@ type setResult struct {
 var bulkSetCmd = &cobra.Command{
 	Use:   "load",
 	Short: "Loads key-value pairs from stdin, creates them",
-	Args:  cobra.ExactArgs(0),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(cmd.Context())
 		defer cancel()
 
-		vals, err := readStdin()
-		if err != nil {
-			printError(fmt.Errorf("failed to read from stdin: %w", err))
+		if len(args) == 0 {
+			values, err := readStdin()
+			if err != nil {
+				printError(fmt.Errorf("failed to read from stdin: %w", err))
+			}
+			args = append(args, values...)
 		}
+
+		if len(args) == 0 {
+			printError(fmt.Errorf("no values provided"))
+		}
+
 		opts := &cliOpts
 		cfg := &cliOpts.clientOpts
-		pending := make([]*pb.KeyValue, 0, len(vals))
+		pending := make([]*pb.KeyValue, 0, len(args))
 		doneChannel := make(chan setResult)
 
 		var lockDuration *durationpb.Duration
@@ -46,7 +53,7 @@ var bulkSetCmd = &cobra.Command{
 			expireAfter = durationpb.New(cfg.KeyLifespan)
 		}
 
-		for _, v := range vals {
+		for _, v := range args {
 			if ctx.Err() != nil {
 				printError(fmt.Errorf("cancelled: %w", ctx.Err()))
 			}
@@ -108,7 +115,7 @@ var bulkSetCmd = &cobra.Command{
 		}
 		defaultLogger.Info(
 			"finished processing",
-			slog.Int("processed", len(vals)),
+			slog.Int("processed", len(args)),
 			slog.Float64("seconds", secs),
 		)
 		return nil

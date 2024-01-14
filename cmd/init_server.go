@@ -2,18 +2,13 @@ package cmd
 
 import (
 	"bufio"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"github.com/arcward/keyquarry/server"
-	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"golang.org/x/term"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -96,7 +91,6 @@ func getTrueFalse(prompt string, defaultTrue bool) (bool, error) {
 		return false, err
 	}
 	line := scanner.Text()
-	//fmt.Println()
 	if line == "" {
 		return defaultTrue, nil
 	}
@@ -107,7 +101,6 @@ func getTrueFalse(prompt string, defaultTrue bool) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("invalid choice")
-
 }
 
 var initServerCmd = &cobra.Command{
@@ -115,24 +108,13 @@ var initServerCmd = &cobra.Command{
 	Short:        "Create a new server configuration",
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-
-		//ctx := cmd.Context()
 		fmt.Println("keyquarry server setup")
 
 		_ = viper.ReadInConfig()
 
 		serverConfig := &cliOpts.ServerOpts
 
-		err := viper.Unmarshal(
-			serverConfig, viper.DecodeHook(
-				mapstructure.ComposeDecodeHookFunc(
-					mapstructure.StringToTimeDurationHookFunc(),
-					mapstructure.StringToSliceHookFunc(","),
-					decodeHashType(),
-				),
-			),
-		)
-
+		err := viper.Unmarshal(serverConfig)
 		if err != nil {
 			return fmt.Errorf("failed to unmarshal config: %w", err)
 		}
@@ -146,11 +128,6 @@ var initServerCmd = &cobra.Command{
 			)
 		}
 
-		available := []string{}
-		for _, h := range availableHashes() {
-			available = append(available, h.String())
-		}
-
 		revisionLimit, err := getInput(
 			"Revision limit",
 			viper.GetString("revision_limit"),
@@ -160,17 +137,6 @@ var initServerCmd = &cobra.Command{
 			return err
 		}
 		viper.Set("revision_limit", revisionLimit)
-
-		hash, err := getInput(
-			"Hash algorithm",
-			viper.GetString("hash_algorithm"),
-			false,
-			available...,
-		)
-		if err != nil {
-			return err
-		}
-		viper.Set("hash_algorithm", hash)
 
 		maxKeys := viper.GetUint64("max_keys")
 		if maxKeys == 0 {
@@ -266,7 +232,7 @@ var initServerCmd = &cobra.Command{
 		}
 
 		createSnapshots, err := getTrueFalse(
-			"Create on-disk snapshots",
+			"Enable periodic snapshots to DB",
 			false,
 		)
 		if err != nil {
@@ -275,141 +241,23 @@ var initServerCmd = &cobra.Command{
 		if createSnapshots {
 			viper.Set("snapshot.enabled", true)
 
-			encryptSnapshots, err := getTrueFalse(
-				"Encrypt snapshots",
-				viper.GetBool("snapshot.encrypt"),
-			)
-			if err != nil {
-				return err
-			}
-			viper.Set("snapshot.encrypt", encryptSnapshots)
-			if encryptSnapshots {
-
-				var goodPassword bool
-				var secretKey []byte
-
-				currentKey := viper.GetString("snapshot.secret_key")
-
-				if currentKey != "" {
-					setNewKey, err := getTrueFalse("Set new secret key?", true)
-					if err != nil {
-						return err
-					}
-					if !setNewKey {
-						keyData := []byte(currentKey)
-						if len(keyData) == 32 || len(keyData) == 16 {
-							goodPassword = true
-							secretKey = make([]byte, len(keyData))
-							copy(secretKey, keyData)
-						}
-					}
-				}
-
-				for !goodPassword {
-					print("Secret key (length 16 or 32, or leave blank to generate a random key): ")
-					secretKey, err = term.ReadPassword(int(os.Stdin.Fd()))
-					fmt.Printf("\n")
-					if err != nil {
-						return err
-					}
-					keyLength := len(secretKey)
-					switch keyLength {
-					case 0:
-						secretKey = make([]byte, 32)
-						_, err = rand.Read(secretKey)
-						if err != nil {
-							return err
-						}
-						hexKey := hex.EncodeToString(secretKey)
-						copy(secretKey, []byte(hexKey))
-						goodPassword = true
-					case 16, 32:
-						goodPassword = true
-
-					default:
-						fmt.Printf(
-							"Secret key must be 16 or 32 bytes, got %d\n",
-							keyLength,
-						)
-					}
-
-				}
-				viper.Set("snapshot.secret_key", string(secretKey))
-
-			}
-
-			snapshotDefaultDir := viper.GetString("snapshot.dir")
-			if snapshotDefaultDir == "" {
-				snapshotDefaultDir, _ = filepath.Abs("./snapshots")
-			}
-
-			snapshotDir, err := getInput(
-				"Snapshot directory",
-				snapshotDefaultDir,
+			currentDBConn := viper.GetString("snapshot.database")
+			snapshotDB, err := getInput(
+				"Snapshot database connection string",
+				currentDBConn,
 				false,
 			)
 			if err != nil {
 				return err
 			}
-			if snapshotDir != "" {
-				snapshotDir, err = filepath.Abs(snapshotDir)
-				if err != nil {
-					return err
-				}
-
-				_, err = os.Stat(snapshotDir)
-				if err != nil {
-					if os.IsNotExist(err) {
-						err = os.MkdirAll(snapshotDir, 0755)
-						if err != nil {
-							return err
-						}
-					} else {
-						return err
-					}
-				}
-				viper.Set("snapshot.dir", snapshotDir)
-
-				snapshotInterval, err := getInput(
-					"Snapshot interval (example: 1h) (0s=only on shutdown)",
-					viper.GetString("snapshot.interval"),
-					false,
-				)
-				if err != nil {
-					return err
-				}
-				_, err = time.ParseDuration(snapshotInterval)
-				if err != nil {
-					return err
-				}
-				viper.Set("snapshot.interval", snapshotInterval)
-
-				snapshotLimit, err := getInput(
-					"Snapshot limit",
-					viper.GetString("snapshot.limit"),
-					false,
-				)
-				if err != nil {
-					return err
-				}
-
-				limit, err := strconv.Atoi(snapshotLimit)
-				if err != nil {
-					return err
-				}
-				if limit < 1 {
-					return fmt.Errorf("snapshot limit must be greater than 0")
-				}
-				viper.Set("snapshot.limit", snapshotLimit)
-
-			}
+			viper.Set("snapshot.database", snapshotDB)
 		} else {
 			viper.Set("snapshot.enabled", false)
 		}
 
 		privilegedClientID, err := getInput(
 			"client ID with privileged access",
-			viper.GetString("privileged_client_ids"),
+			viper.GetString("privileged_client_id"),
 			false,
 		)
 		if err != nil {
@@ -417,13 +265,9 @@ var initServerCmd = &cobra.Command{
 		}
 		viper.Set("privileged_client_id", privilegedClientID)
 
-		if createSnapshots {
-
-		}
-
 		currentAddr := viper.GetString("listen_address")
 		if currentAddr == "" {
-			currentAddr = defaultAddress
+			currentAddr = server.DefaultAddress
 		}
 		addr, err := getInput("Listen address", currentAddr, false)
 		if err != nil {

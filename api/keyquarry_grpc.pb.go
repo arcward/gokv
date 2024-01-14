@@ -31,9 +31,9 @@ type KeyValueStoreClient interface {
 	// Get returns the value of a key. If the key does not exist,
 	// an error will be returned.
 	Get(ctx context.Context, in *Key, opts ...grpc.CallOption) (*GetResponse, error)
-	// GetKeyInfo returns metadata about a key. If the key does not
+	// Inspect returns metadata about a key. If the key does not
 	// exist, an error will be returned.
-	GetKeyInfo(ctx context.Context, in *Key, opts ...grpc.CallOption) (*GetKeyValueInfoResponse, error)
+	Inspect(ctx context.Context, in *InspectRequest, opts ...grpc.CallOption) (*InspectResponse, error)
 	// Delete deletes a key. If the key does not exist, an error
 	// will be returned. If the key is locked, an error will
 	// be returned.
@@ -62,6 +62,9 @@ type KeyValueStoreClient interface {
 	GetRevision(ctx context.Context, in *GetRevisionRequest, opts ...grpc.CallOption) (*RevisionResponse, error)
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	SetReadOnly(ctx context.Context, in *ReadOnlyRequest, opts ...grpc.CallOption) (*ReadOnlyResponse, error)
+	WatchStream(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (KeyValueStore_WatchStreamClient, error)
+	GetKeyMetric(ctx context.Context, in *KeyMetricRequest, opts ...grpc.CallOption) (*KeyMetric, error)
+	WatchKeyValue(ctx context.Context, in *WatchKeyValueRequest, opts ...grpc.CallOption) (KeyValueStore_WatchKeyValueClient, error)
 }
 
 type keyValueStoreClient struct {
@@ -90,9 +93,9 @@ func (c *keyValueStoreClient) Get(ctx context.Context, in *Key, opts ...grpc.Cal
 	return out, nil
 }
 
-func (c *keyValueStoreClient) GetKeyInfo(ctx context.Context, in *Key, opts ...grpc.CallOption) (*GetKeyValueInfoResponse, error) {
-	out := new(GetKeyValueInfoResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/GetKeyInfo", in, out, opts...)
+func (c *keyValueStoreClient) Inspect(ctx context.Context, in *InspectRequest, opts ...grpc.CallOption) (*InspectResponse, error) {
+	out := new(InspectResponse)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Inspect", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +210,79 @@ func (c *keyValueStoreClient) SetReadOnly(ctx context.Context, in *ReadOnlyReque
 	return out, nil
 }
 
+func (c *keyValueStoreClient) WatchStream(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (KeyValueStore_WatchStreamClient, error) {
+	stream, err := c.cc.NewStream(ctx, &KeyValueStore_ServiceDesc.Streams[0], "/keyquarry.KeyValueStore/WatchStream", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &keyValueStoreWatchStreamClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type KeyValueStore_WatchStreamClient interface {
+	Recv() (*Event, error)
+	grpc.ClientStream
+}
+
+type keyValueStoreWatchStreamClient struct {
+	grpc.ClientStream
+}
+
+func (x *keyValueStoreWatchStreamClient) Recv() (*Event, error) {
+	m := new(Event)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (c *keyValueStoreClient) GetKeyMetric(ctx context.Context, in *KeyMetricRequest, opts ...grpc.CallOption) (*KeyMetric, error) {
+	out := new(KeyMetric)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/GetKeyMetric", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keyValueStoreClient) WatchKeyValue(ctx context.Context, in *WatchKeyValueRequest, opts ...grpc.CallOption) (KeyValueStore_WatchKeyValueClient, error) {
+	stream, err := c.cc.NewStream(ctx, &KeyValueStore_ServiceDesc.Streams[1], "/keyquarry.KeyValueStore/WatchKeyValue", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &keyValueStoreWatchKeyValueClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type KeyValueStore_WatchKeyValueClient interface {
+	Recv() (*WatchKeyValueResponse, error)
+	grpc.ClientStream
+}
+
+type keyValueStoreWatchKeyValueClient struct {
+	grpc.ClientStream
+}
+
+func (x *keyValueStoreWatchKeyValueClient) Recv() (*WatchKeyValueResponse, error) {
+	m := new(WatchKeyValueResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // KeyValueStoreServer is the server API for KeyValueStore service.
 // All implementations must embed UnimplementedKeyValueStoreServer
 // for forward compatibility
@@ -220,9 +296,9 @@ type KeyValueStoreServer interface {
 	// Get returns the value of a key. If the key does not exist,
 	// an error will be returned.
 	Get(context.Context, *Key) (*GetResponse, error)
-	// GetKeyInfo returns metadata about a key. If the key does not
+	// Inspect returns metadata about a key. If the key does not
 	// exist, an error will be returned.
-	GetKeyInfo(context.Context, *Key) (*GetKeyValueInfoResponse, error)
+	Inspect(context.Context, *InspectRequest) (*InspectResponse, error)
 	// Delete deletes a key. If the key does not exist, an error
 	// will be returned. If the key is locked, an error will
 	// be returned.
@@ -251,6 +327,9 @@ type KeyValueStoreServer interface {
 	GetRevision(context.Context, *GetRevisionRequest) (*RevisionResponse, error)
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	SetReadOnly(context.Context, *ReadOnlyRequest) (*ReadOnlyResponse, error)
+	WatchStream(*WatchRequest, KeyValueStore_WatchStreamServer) error
+	GetKeyMetric(context.Context, *KeyMetricRequest) (*KeyMetric, error)
+	WatchKeyValue(*WatchKeyValueRequest, KeyValueStore_WatchKeyValueServer) error
 	mustEmbedUnimplementedKeyValueStoreServer()
 }
 
@@ -264,8 +343,8 @@ func (UnimplementedKeyValueStoreServer) Set(context.Context, *KeyValue) (*SetRes
 func (UnimplementedKeyValueStoreServer) Get(context.Context, *Key) (*GetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
 }
-func (UnimplementedKeyValueStoreServer) GetKeyInfo(context.Context, *Key) (*GetKeyValueInfoResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetKeyInfo not implemented")
+func (UnimplementedKeyValueStoreServer) Inspect(context.Context, *InspectRequest) (*InspectResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Inspect not implemented")
 }
 func (UnimplementedKeyValueStoreServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
@@ -302,6 +381,15 @@ func (UnimplementedKeyValueStoreServer) Register(context.Context, *RegisterReque
 }
 func (UnimplementedKeyValueStoreServer) SetReadOnly(context.Context, *ReadOnlyRequest) (*ReadOnlyResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetReadOnly not implemented")
+}
+func (UnimplementedKeyValueStoreServer) WatchStream(*WatchRequest, KeyValueStore_WatchStreamServer) error {
+	return status.Errorf(codes.Unimplemented, "method WatchStream not implemented")
+}
+func (UnimplementedKeyValueStoreServer) GetKeyMetric(context.Context, *KeyMetricRequest) (*KeyMetric, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetKeyMetric not implemented")
+}
+func (UnimplementedKeyValueStoreServer) WatchKeyValue(*WatchKeyValueRequest, KeyValueStore_WatchKeyValueServer) error {
+	return status.Errorf(codes.Unimplemented, "method WatchKeyValue not implemented")
 }
 func (UnimplementedKeyValueStoreServer) mustEmbedUnimplementedKeyValueStoreServer() {}
 
@@ -352,20 +440,20 @@ func _KeyValueStore_Get_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_GetKeyInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Key)
+func _KeyValueStore_Inspect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InspectRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).GetKeyInfo(ctx, in)
+		return srv.(KeyValueStoreServer).Inspect(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/GetKeyInfo",
+		FullMethod: "/keyquarry.KeyValueStore/Inspect",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).GetKeyInfo(ctx, req.(*Key))
+		return srv.(KeyValueStoreServer).Inspect(ctx, req.(*InspectRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -586,6 +674,66 @@ func _KeyValueStore_SetReadOnly_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _KeyValueStore_WatchStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(KeyValueStoreServer).WatchStream(m, &keyValueStoreWatchStreamServer{stream})
+}
+
+type KeyValueStore_WatchStreamServer interface {
+	Send(*Event) error
+	grpc.ServerStream
+}
+
+type keyValueStoreWatchStreamServer struct {
+	grpc.ServerStream
+}
+
+func (x *keyValueStoreWatchStreamServer) Send(m *Event) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func _KeyValueStore_GetKeyMetric_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KeyMetricRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeyValueStoreServer).GetKeyMetric(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/keyquarry.KeyValueStore/GetKeyMetric",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeyValueStoreServer).GetKeyMetric(ctx, req.(*KeyMetricRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeyValueStore_WatchKeyValue_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchKeyValueRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(KeyValueStoreServer).WatchKeyValue(m, &keyValueStoreWatchKeyValueServer{stream})
+}
+
+type KeyValueStore_WatchKeyValueServer interface {
+	Send(*WatchKeyValueResponse) error
+	grpc.ServerStream
+}
+
+type keyValueStoreWatchKeyValueServer struct {
+	grpc.ServerStream
+}
+
+func (x *keyValueStoreWatchKeyValueServer) Send(m *WatchKeyValueResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // KeyValueStore_ServiceDesc is the grpc.ServiceDesc for KeyValueStore service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -602,8 +750,8 @@ var KeyValueStore_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _KeyValueStore_Get_Handler,
 		},
 		{
-			MethodName: "GetKeyInfo",
-			Handler:    _KeyValueStore_GetKeyInfo_Handler,
+			MethodName: "Inspect",
+			Handler:    _KeyValueStore_Inspect_Handler,
 		},
 		{
 			MethodName: "Delete",
@@ -653,7 +801,22 @@ var KeyValueStore_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "SetReadOnly",
 			Handler:    _KeyValueStore_SetReadOnly_Handler,
 		},
+		{
+			MethodName: "GetKeyMetric",
+			Handler:    _KeyValueStore_GetKeyMetric_Handler,
+		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchStream",
+			Handler:       _KeyValueStore_WatchStream_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "WatchKeyValue",
+			Handler:       _KeyValueStore_WatchKeyValue_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "api/keyquarry.proto",
 }

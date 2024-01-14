@@ -4,9 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -30,13 +28,15 @@ import (
 	"time"
 )
 
-var signals = make(chan os.Signal, 1)
-var ctx context.Context
-var cancel context.CancelFunc
-var defaultClientID = "foo"
-var privilegedClientID = "someprivilegedidhere"
-var testTimeout = 60 * time.Second
-var dialTimeout = 10 * time.Second
+var (
+	signals            = make(chan os.Signal, 1)
+	ctx                context.Context
+	cancel             context.CancelFunc
+	defaultClientID    = "foo"
+	privilegedClientID = "someprivilegedidhere"
+	testTimeout        = 60 * time.Second
+	dialTimeout        = 10 * time.Second
+)
 
 type AddrTest struct {
 	ListenAddress string
@@ -114,7 +114,7 @@ func newServer(
 	var srv *server.KeyValueStore
 	var gServer *grpc.Server
 
-	//log.SetOutput(io.Discard)
+	// log.SetOutput(io.Discard)
 
 	td := os.Getenv("TEST_TIMEOUT")
 	if td != "" {
@@ -154,7 +154,6 @@ func newServer(
 	if cfg == nil {
 		cfg = server.DefaultConfig()
 
-		cfg.HashAlgorithm = crypto.MD5
 		cfg.RevisionLimit = 2
 		cfg.MinLifespan = time.Duration(1) * time.Second
 		cfg.MinLockDuration = time.Duration(1) * time.Second
@@ -316,16 +315,6 @@ func init() {
 	fmt.Println("init done")
 }
 
-// failOnErr is a helper function that takes the result of a function that
-// only has 1 return value (error), and fails the test if the error is not nil.
-// It's intended to reduce boilerplate code in tests.
-func failOnErr(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Errorf("[%s] error: %s", t.Name(), err.Error())
-	}
-}
-
 func TestSetCmd(t *testing.T) {
 
 	_ = newServer(t, nil, socketAddr(t))
@@ -479,34 +468,33 @@ func TestServerCmd(t *testing.T) {
 	)
 
 	tdir := t.TempDir()
-	tempSnapshots := filepath.Join(tdir, "snapshots")
 
-	secretKey := generateRandomSecretKey(t)
 	snapshotInterval := 2 * time.Second
-	snapshotLimit := 3
 
 	var newMaxKeySize uint64 = 500
 	var newMaxValueSize uint64 = 1234
 	var newMaxKeys uint64 = 9876
-	var newHashAlgorithm = crypto.SHA256
 	var newRevisionLimit int64 = 1234
 
+	dbfile := filepath.Join(tdir, "test.db")
+	dbConnStr := fmt.Sprintf("sqlite://%s", dbfile)
+	serverName := t.Name()
 	tempConfig := map[string]string{
-		"SNAPSHOT.ENCRYPT":    "true",
-		"SNAPSHOT.SECRET_KEY": secretKey,
-		"HASH_ALGORITHM":      newHashAlgorithm.String(),
-		"SNAPSHOT.DIR":        tempSnapshots,
-		"SNAPSHOT.INTERVAL":   snapshotInterval.String(),
-		"SNAPSHOT.LIMIT":      fmt.Sprintf("%d", snapshotLimit),
-		"SNAPSHOT.ENABLED":    "true",
-		"LISTEN_ADDRESS":      addr.ListenAddress,
-		"MAX_KEY_SIZE":        fmt.Sprintf("%d", newMaxKeySize),
-		"MAX_KEYS":            fmt.Sprintf("%d", newMaxKeys),
-		"MAX_VALUE_SIZE":      fmt.Sprintf("%d", newMaxValueSize),
-		"REVISION_LIMIT":      fmt.Sprintf("%d", newRevisionLimit),
-		"PRUNE_INTERVAL":      "1s",
-		"MIN_PRUNE_INTERVAL":  "1s",
-		"LOG_LEVEL":           "DEBUG",
+		"SNAPSHOT.INTERVAL":  snapshotInterval.String(),
+		"SNAPSHOT.ENABLED":   "true",
+		"SNAPSHOT.DATABASE":  dbConnStr,
+		"LISTEN_ADDRESS":     addr.ListenAddress,
+		"MAX_KEY_LENGTH":     fmt.Sprintf("%d", newMaxKeySize),
+		"MAX_KEYS":           fmt.Sprintf("%d", newMaxKeys),
+		"MAX_VALUE_SIZE":     fmt.Sprintf("%d", newMaxValueSize),
+		"REVISION_LIMIT":     fmt.Sprintf("%d", newRevisionLimit),
+		"PRUNE_INTERVAL":     "1s",
+		"MIN_PRUNE_INTERVAL": "1s",
+		"LOG_LEVEL":          "DEBUG",
+		"NAME":               serverName,
+		"MONITOR_ADDRESS":    "localhost:33970",
+		"METRICS":            "true",
+		"EXPVAR":             "true",
 	}
 
 	clientCfg := kc.DefaultConfig()
@@ -589,15 +577,23 @@ func TestServerCmd(t *testing.T) {
 		},
 	)
 
-	type Filename string
-	// Maps filenames to key names
-	snapshotsSeen := map[Filename]string{}
-	// Maps the iteration number to the filename
-	snapshotsByNum := map[int]Filename{}
+	connStr := fmt.Sprintf("sqlite://%s?mode=ro", dbfile)
+	dialect := server.GetDialect(connStr)
+	if dialect == nil {
+		t.Fatalf("error getting dialect for %s", connStr)
+	}
+	db, err := dialect.DBConn(connStr)
+	fatalOnErr(t, err)
+
+	if err != nil {
+		t.Fatalf("error connecting to db: %s", err.Error())
+	}
 
 	// Loop up to the snapshot limit + 1, so we can verify that the oldest
 	// snapshot is deleted when the limit is reached
-	for i := 0; i < snapshotLimit+1; i++ {
+	var snapshotCt int
+
+	for i := 0; i < 5; i++ {
 		// Create a new key on each iteration, with a name reflecting
 		// each iteration number
 		kv := &pb.KeyValue{Key: fmt.Sprintf("foo-%d", i), Value: []byte("bar")}
@@ -626,98 +622,30 @@ func TestServerCmd(t *testing.T) {
 				}
 			}
 
-			snapshots, se := filepath.Glob(
-				filepath.Join(
-					tempSnapshots,
-					"*.json.aes.gz",
-				),
-			)
-			if se != nil {
-				sscancel()
-				t.Fatalf("error globbing snapshots: %s", se.Error())
+			err = db.QueryRowContext(
+				tctx,
+				"SELECT COUNT(*) FROM snapshots WHERE server_name = ?",
+				serverName,
+			).Scan(&snapshotCt)
+			if snapshotCt > i {
+				break
 			}
-			if len(snapshots) == 0 {
-				continue
-			}
-
-			// If there are snapshots and we (should have) exceeded the
-			// snapshot limit, verify that the oldest snapshot was deleted
-			if i > snapshotLimit {
-				firstSnapshot := string(snapshotsByNum[0])
-				_, ssErr := os.Stat(firstSnapshot)
-				if ssErr == nil || !os.IsNotExist(ssErr) {
-					t.Fatalf(
-						"expected first snapshot to be deleted, still exists: %s",
-						firstSnapshot,
-					)
-				}
-				// Verify that the number of snapshots is equal to the
-				// snapshot limit, in addition to the oldest snapshot
-				// having been deleted
-				if len(snapshots) > snapshotLimit {
-					t.Fatalf(
-						"expected %d snapshots, got %d",
-						snapshotLimit,
-						len(snapshots),
-					)
-				}
-			}
-
-			// We should find a new snapshot file, and it should have
-			// the key for the current iteration
-			for _, sf := range snapshots {
-				if ssctx.Err() != nil {
-					if errors.Is(ssctx.Err(), context.DeadlineExceeded) {
-						t.Fatalf("timeout waiting for snapshot %d", i)
-					} else {
-						t.Logf("breaking out of snapshot on loop %d", i)
-						break
-					}
-				}
-				sfilename := Filename(sf)
-				_, fileSeen := snapshotsSeen[sfilename]
-
-				if !fileSeen {
-					t.Logf(
-						"snapshot after creating %s: %s",
-						kv.Key,
-						sfilename,
-					)
-					snapdata, serr := server.ReadSnapshot(sf, secretKey)
-					fatalOnErr(t, serr)
-					for _, snapKey := range snapdata.Keys {
-						if snapKey.Key == kv.Key {
-							// once we find it, track it and cancel the
-							// current loop's context so we don't
-							// time out and can move on
-							sscancel()
-							snapshotsSeen[sfilename] = kv.Key
-							snapshotsByNum[i] = sfilename
-							break
-						}
-					}
-					_, foundKey := snapshotsByNum[i]
-					if !foundKey {
-						t.Fatalf(
-							"unable to find key %s in snapshot %s",
-							kv.Key,
-							sfilename,
-						)
-					}
-				}
-			}
+			time.Sleep(1 * time.Second)
 		}
+		sscancel()
 	}
+	assertEqual(t, snapshotCt, 5)
 
-	if len(snapshotsSeen) != snapshotLimit+1 {
-		t.Fatalf(
-			"expected %d snapshots, got %d",
-			snapshotLimit+1,
-			len(snapshotsSeen),
-		)
-	}
+	resp, err := http.Get("http://localhost:33970/metrics")
+	fatalOnErr(t, err)
+	defer resp.Body.Close()
+	assertEqual(t, resp.StatusCode, http.StatusOK)
 
-	t.Logf("snapshots seen: %#v / %#v", snapshotsByNum, snapshotsSeen)
+	body, err := io.ReadAll(resp.Body)
+	fatalOnErr(t, err)
+
+	t.Logf("data: %s", string(body))
+
 	time.Sleep(1 * time.Second)
 	srvCancel()
 	// Wait for the command to finish, then verify it deleted the socket
@@ -727,13 +655,13 @@ func TestServerCmd(t *testing.T) {
 	// Validate the end result of the config
 	currentServer := cliOpts.server
 	cfg := currentServer.Config()
-	assertEqual(t, cfg.Snapshot.SecretKey, secretKey)
-	assertEqual(t, cfg.Snapshot.Dir, tempSnapshots)
-	assertEqual(t, cfg.Snapshot.Encrypt, true)
+
 	assertEqual(t, cfg.Snapshot.Interval, snapshotInterval)
-	assertEqual(t, cfg.Snapshot.Limit, snapshotLimit)
-	assertEqual(t, cfg.HashAlgorithm, newHashAlgorithm)
-	assertEqual(t, cfg.MaxKeySize, newMaxKeySize)
+	assertEqual(
+		t,
+		fmt.Sprintf("%d", cfg.MaxKeyLength),
+		fmt.Sprintf("%d", newMaxKeySize),
+	)
 	assertEqual(t, cfg.MaxValueSize, newMaxValueSize)
 	assertEqual(t, cfg.RevisionLimit, newRevisionLimit)
 	assertEqual(t, cfg.MaxNumberOfKeys, newMaxKeys)
@@ -754,85 +682,6 @@ func TestServerCmd(t *testing.T) {
 			err,
 		)
 	}
-
-	secondSnapshot := string(snapshotsByNum[1])
-	_, ssErr := os.Stat(secondSnapshot)
-	if ssErr == nil || !os.IsNotExist(ssErr) {
-		t.Fatalf(
-			"expected second snapshot to be deleted, still exists: %s",
-			secondSnapshot,
-		)
-	}
-	snapshots, se := filepath.Glob(
-		filepath.Join(
-			tempSnapshots,
-			"*.json.aes.gz",
-		),
-	)
-	failOnErr(t, se)
-	assertEqual(t, len(snapshots), snapshotLimit)
-
-	var finalSnapshot string
-	lastSnapshotsSeen := []string{}
-	for _, sf := range snapshots {
-		sfilename := Filename(sf)
-		lastSnapshotsSeen = append(lastSnapshotsSeen, sf)
-		_, ok := snapshotsSeen[sfilename]
-		if !ok {
-			finalSnapshot = sf
-		}
-	}
-	if finalSnapshot == "" {
-		t.Fatalf(
-			"unable to find final snapshot (current files: %+v), seen: %+v",
-			lastSnapshotsSeen,
-			snapshotsSeen,
-		)
-	} else {
-		snapshotData, e := server.ReadSnapshot(finalSnapshot, secretKey)
-		if e != nil {
-			t.Fatalf(
-				"error reading snapshot '%s': %s",
-				finalSnapshot,
-				e.Error(),
-			)
-		}
-		assertEqual(t, len(snapshotData.Keys), snapshotLimit+1)
-	}
-
-	pruneHistory := currentServer.PruneHistory()
-	if pruneHistory == nil {
-		t.Errorf("expected pruneHistory to be set")
-	}
-	t.Logf("prune history: %#v", pruneHistory)
-
-}
-
-func fatalOnErr(t *testing.T, err error, msg ...string) {
-	t.Helper()
-	if err != nil {
-		if len(msg) > 0 {
-			t.Fatalf(
-				"expected no error, got: %s (%s)",
-				err.Error(),
-				strings.Join(msg, " / "),
-			)
-		} else {
-			t.Fatalf("expected no error, got: %s", err.Error())
-		}
-	}
-}
-
-func generateRandomSecretKey(t *testing.T) string {
-	t.Helper()
-	secretKey := make([]byte, 32)
-	_, err := rand.Read(secretKey)
-	if err != nil {
-		t.Fatalf("error generating random secret key: %s", err.Error())
-	}
-	hexKey := hex.EncodeToString(secretKey)
-	copy(secretKey, hexKey)
-	return string(secretKey)
 }
 
 func TestListKeysCmd(t *testing.T) {
@@ -881,39 +730,6 @@ func TestListKeysCmd(t *testing.T) {
 	keys = strings.Split(data, "\n")
 	assertEqual(t, len(keys), 2)
 	assertSliceContains(t, keys, "bar", "baz")
-
-}
-
-func assertSliceContains[V comparable](t *testing.T, value []V, expected ...V) {
-	t.Helper()
-	found := map[V]bool{}
-	if len(expected) == 0 {
-		t.Fatalf("expected slice must not be empty")
-	}
-	for _, v := range value {
-		for _, exp := range expected {
-			if v == exp {
-				found[exp] = true
-				break
-			}
-		}
-	}
-	if len(found) != len(expected) {
-		t.Errorf(
-			"expected:\n%#v\n\nnot found in:\n%#v", expected, value,
-		)
-	}
-}
-
-func assertEqual[V comparable](t *testing.T, val V, expected V) {
-	t.Helper()
-	if val != expected {
-		t.Errorf(
-			"expected:\n%#v\n\ngot:\n%#v",
-			expected,
-			val,
-		)
-	}
 }
 
 func TestSetReadonlyCmd(t *testing.T) {
@@ -958,7 +774,6 @@ func TestSetReadonlyCmd(t *testing.T) {
 	fatalOnErr(t, err)
 	assertEqual(t, data, string(expected))
 	assertEqual(t, srv.Config().Readonly, false)
-
 }
 
 func TestLockCmd(t *testing.T) {
@@ -971,9 +786,9 @@ func TestLockCmd(t *testing.T) {
 	_, err := client.Set(cctx, &pb.KeyValue{Key: "foo", Value: value})
 	failOnErr(t, err)
 
-	kvInfo, err := client.GetKeyInfo(cctx, &pb.Key{Key: "foo"})
+	kvInfo, err := client.Inspect(cctx, &pb.InspectRequest{Key: "foo"})
 	fatalOnErr(t, err)
-	assertEqual(t, kvInfo.Locked, false)
+	assertEqual(t, *kvInfo.Locked, false)
 
 	f := func() {
 		failOnErr(t, lockCmd.Execute())
@@ -1013,9 +828,7 @@ func TestLockCmdCreateIfMissing(t *testing.T) {
 }
 
 func TestUnlockCmd(t *testing.T) {
-
 	addr := socketAddr(t)
-
 	_ = newServer(t, nil, addr)
 
 	client := newClient(t, nil, addr)
@@ -1042,9 +855,9 @@ func TestUnlockCmd(t *testing.T) {
 		},
 	)
 
-	kvInfo, err := client.GetKeyInfo(cctx, &pb.Key{Key: "foo"})
+	kvInfo, err := client.Inspect(cctx, &pb.InspectRequest{Key: "foo"})
 	fatalOnErr(t, err)
-	assertEqual(t, kvInfo.Locked, true)
+	assertEqual(t, *kvInfo.Locked, true)
 
 	f := func() {
 		fatalOnErr(t, unlockCmd.Execute())
@@ -1053,7 +866,6 @@ func TestUnlockCmd(t *testing.T) {
 
 	lockResponse := pb.UnlockResponse{Success: true}
 	expected, err := json.Marshal(lockResponse)
-
 	assertEqual(t, data, string(expected))
 }
 
@@ -1084,12 +896,66 @@ func TestDeleteCmd(t *testing.T) {
 	assertEqual(t, data, string(expected))
 }
 
-func TestGetKeyInfoCmd(t *testing.T) {
+func TestGetKeyMetricsCmd(t *testing.T) {
+	addr := socketAddr(t)
+	_ = newServer(t, nil, addr)
+	client := newClient(t, nil, addr)
+	keyMetricsCmd.SetContext(ctx)
+	key := "foo"
+	rootCmd.SetArgs([]string{"client", "key-metric", key})
+	value := []byte("baz")
+	cctx := clientCtx(t)
+	_, err := client.Set(
+		cctx,
+		&pb.KeyValue{
+			Key:          key,
+			Value:        value,
+			LockDuration: durationpb.New(1 * time.Hour),
+		},
+	)
+	fatalOnErr(t, err)
+
+	_, err = client.Get(
+		cctx,
+		&pb.Key{
+			Key: key,
+		},
+	)
+	fatalOnErr(t, err)
+
+	f := func() {
+		failOnErr(t, keyMetricsCmd.Execute())
+	}
+	data := captureOutput(t, f)
+
+	var km pb.KeyMetric
+	t.Logf("result: %s", string(data))
+	err = json.Unmarshal([]byte(data), &km)
+	fatalOnErr(t, err)
+
+	assertEqual(t, km.AccessCount, 1)
+	if km.FirstAccessed == nil {
+		t.Errorf("expected FirstAccessed to be set")
+	}
+	assertEqual(t, km.FirstAccessed.AsTime(), km.LastAccessed.AsTime())
+
+	assertEqual(t, km.SetCount, 1)
+	if km.FirstSet == nil {
+		t.Errorf("expected FirstSet to be set")
+	}
+	assertEqual(t, km.FirstSet.AsTime(), km.LastSet.AsTime())
+
+	assertEqual(t, km.LockCount, 1)
+	assertEqual(t, km.FirstLocked.AsTime().IsZero(), false)
+	assertEqual(t, km.LastLocked.AsTime(), km.FirstLocked.AsTime())
+}
+
+func TestInspectKeyCmd(t *testing.T) {
 	addr := socketAddr(t)
 	_ = newServer(t, nil, addr)
 	client := newClient(t, nil, addr)
 	infoCmd.SetContext(ctx)
-	rootCmd.SetArgs([]string{"client", "info", "foo"})
+	rootCmd.SetArgs([]string{"client", "inspect", "foo"})
 	value := []byte("baz")
 	cctx := clientCtx(t)
 	_, err := client.Set(
@@ -1107,10 +973,67 @@ func TestGetKeyInfoCmd(t *testing.T) {
 	}
 	data := captureOutput(t, f)
 
-	kvInfo, err := client.GetKeyInfo(cctx, &pb.Key{Key: "foo"})
+	kvInfo, err := client.Inspect(cctx, &pb.InspectRequest{Key: "foo"})
 	failOnErr(t, err)
 	expected, err := json.Marshal(kvInfo)
 	failOnErr(t, err)
 
 	assertEqual(t, data, string(expected))
+}
+
+// failOnErr is a helper function that takes the result of a function that
+// only has 1 return value (error), and fails the test if the error is not nil.
+// It's intended to reduce boilerplate code in tests.
+func failOnErr(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Errorf("[%s] error: %s", t.Name(), err.Error())
+	}
+}
+
+func assertSliceContains[V comparable](t *testing.T, value []V, expected ...V) {
+	t.Helper()
+	found := map[V]bool{}
+	if len(expected) == 0 {
+		t.Fatalf("expected slice must not be empty")
+	}
+	for _, v := range value {
+		for _, exp := range expected {
+			if v == exp {
+				found[exp] = true
+				break
+			}
+		}
+	}
+	if len(found) != len(expected) {
+		t.Errorf(
+			"expected:\n%#v\n\nnot found in:\n%#v", expected, value,
+		)
+	}
+}
+
+func assertEqual[V comparable](t *testing.T, val V, expected V) {
+	t.Helper()
+	if val != expected {
+		t.Errorf(
+			"expected:\n%#v\n\ngot:\n%#v",
+			expected,
+			val,
+		)
+	}
+}
+
+func fatalOnErr(t *testing.T, err error, msg ...string) {
+	t.Helper()
+	if err != nil {
+		if len(msg) > 0 {
+			t.Fatalf(
+				"expected no error, got: %s (%s)",
+				err.Error(),
+				strings.Join(msg, " / "),
+			)
+		} else {
+			t.Fatalf("expected no error, got: %s", err.Error())
+		}
+	}
 }
