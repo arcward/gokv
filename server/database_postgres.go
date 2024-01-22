@@ -1,6 +1,6 @@
 package server
 
-var PSQL = sqlDialect{
+var PSQL = SQLDialect{
 	Driver:       "postgres",
 	DriverPrefix: "postgres://",
 	CreateSnapshotTable: `

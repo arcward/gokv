@@ -15,11 +15,19 @@ var getCmd = &cobra.Command{
 		key := args[0]
 		opts := &cliOpts
 		var value []byte
-		if opts.clientOpts.GetKeyVersion == 0 {
+		defaultLogger.Debug(
+			"getting key",
+			"key",
+			key,
+			"revision",
+			opts.clientOpts.GetKeyVersion,
+		)
+		switch opts.clientOpts.GetKeyVersion {
+		case 0:
 			kv, err := opts.client.Get(ctx, &pb.Key{Key: key})
 			printError(err)
 			value = kv.Value
-		} else {
+		default:
 			kv, err := opts.client.GetRevision(
 				ctx,
 				&pb.GetRevisionRequest{
@@ -30,6 +38,7 @@ var getCmd = &cobra.Command{
 			printError(err)
 			value = kv.Value
 		}
+
 		_, err := fmt.Fprintln(out, string(value))
 		printError(err)
 		return nil

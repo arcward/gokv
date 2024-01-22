@@ -14,10 +14,7 @@ var watchCmd = &cobra.Command{
 		opts := &cliOpts
 		client := opts.client
 
-		stream, e := client.WatchStream(
-			ctx,
-			&pb.WatchRequest{},
-		)
+		stream, e := client.WatchStream(ctx, &pb.WatchRequest{})
 		printError(e)
 
 		for {

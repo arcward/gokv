@@ -24,6 +24,7 @@ all: test proto build autocomplete-bash
 .PHONY: proto
 proto:
 	@protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative api/keyquarry.proto
+	@protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative api/admin.proto
 
 
 .PHONY: test

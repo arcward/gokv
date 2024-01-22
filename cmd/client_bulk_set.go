@@ -6,7 +6,6 @@ import (
 	pb "github.com/arcward/keyquarry/api"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"log"
 	"log/slog"
 	"runtime"
 	"strings"
@@ -17,6 +16,7 @@ import (
 type setResult struct {
 	Key    string
 	Result *pb.SetResponse
+	Error  error
 }
 
 var bulkSetCmd = &cobra.Command{
@@ -39,7 +39,7 @@ var bulkSetCmd = &cobra.Command{
 		}
 
 		opts := &cliOpts
-		cfg := &cliOpts.clientOpts
+		cfg := opts.clientOpts
 		pending := make([]*pb.KeyValue, 0, len(args))
 		doneChannel := make(chan setResult)
 
@@ -83,9 +83,7 @@ var bulkSetCmd = &cobra.Command{
 					rv := setResult{Key: pk.Key}
 					res, err := opts.client.Set(ctx, pk)
 					rv.Result = res
-					if err != nil {
-						log.Printf("failed to set key: %s", err.Error())
-					}
+					rv.Error = err
 					doneChannel <- rv
 				}
 			}()
@@ -103,6 +101,7 @@ var bulkSetCmd = &cobra.Command{
 			}
 			close(sendChannel)
 		}()
+
 		var secs float64
 		go func() {
 			wg.Wait()
@@ -111,7 +110,12 @@ var bulkSetCmd = &cobra.Command{
 		}()
 
 		for result := range doneChannel {
-			fmt.Printf("%s: %+v\n", result.Key, result.Result)
+			switch {
+			case result.Error == nil:
+				fmt.Printf("%s: %+v\n", result.Key, result.Result)
+			default:
+				fmt.Printf("error: %s: %s\n", result.Key, result.Error)
+			}
 		}
 		defaultLogger.Info(
 			"finished processing",

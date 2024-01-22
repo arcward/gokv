@@ -16,7 +16,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -31,22 +30,20 @@ import (
 const bufSize = 1024 * 1024
 
 var (
-	signals         = make(chan os.Signal, 1)
-	ctx             context.Context
-	cancel          context.CancelFunc
-	defaultClientID               = "foo"
-	testTimeout     time.Duration = 60 * time.Second
-	dialTimeout                   = 10 * time.Second
+	signals     = make(chan os.Signal, 1)
+	ctx         context.Context
+	cancel      context.CancelFunc
+	testTimeout = 60 * time.Second
+	dialTimeout = 10 * time.Second
 )
 
 func newServer(t testing.TB, lis *bufconn.Listener, cfg *Config) (
-	*KeyValueStore,
+	*Server,
 	*bufconn.Listener,
 ) {
 	t.Helper()
 
-	var srv *KeyValueStore
-	var s *grpc.Server
+	var srv *Server
 
 	log.SetOutput(io.Discard)
 	if lis == nil {
@@ -64,13 +61,16 @@ func newServer(t testing.TB, lis *bufconn.Listener, cfg *Config) (
 
 	var err error
 	if cfg == nil {
-		cfg = DefaultConfig()
+		cfg = NewConfig()
 		cfg.RevisionLimit = 2
 		cfg.MinLifespan = time.Duration(1) * time.Second
 		cfg.MinLockDuration = time.Duration(1) * time.Second
-		cfg.EagerPrune = false
 		cfg.PruneInterval = 0
-		cfg.LogLevel = "ERROR"
+		cfg.LogLevel = "DEBUG"
+		cfg.Name = t.Name()
+		cfg.MaxLockDuration = time.Duration(1) * time.Hour
+	}
+	if cfg.Name == "" {
 		cfg.Name = t.Name()
 	}
 	handler := slog.NewTextHandler(
@@ -81,24 +81,11 @@ func newServer(t testing.TB, lis *bufconn.Listener, cfg *Config) (
 	slog.SetDefault(logger)
 	cfg.Logger = logger
 
-	srv, err = NewServer(cfg)
+	srv, err = New(cfg)
 	if err != nil {
 		panic(err)
 	}
-
-	if s == nil {
-		s = grpc.NewServer(
-			grpc.UnaryInterceptor(ClientIDInterceptor(srv)),
-			grpc.KeepaliveEnforcementPolicy(
-				keepalive.EnforcementPolicy{
-					MinTime:             5 * time.Second,
-					PermitWithoutStream: true,
-				},
-			),
-		)
-	}
-
-	pb.RegisterKeyValueStoreServer(s, srv)
+	srv.lis = lis
 
 	tctx, tcancel := context.WithTimeout(ctx, testTimeout)
 
@@ -110,35 +97,20 @@ func newServer(t testing.TB, lis *bufconn.Listener, cfg *Config) (
 			}
 		}
 	}()
-	srvDone := make(chan struct{})
+
 	go func() {
-		defer func() {
-			srvDone <- struct{}{}
-		}()
-		if e := srv.Start(tctx); e != nil {
+		if e := srv.Serve(tctx); e != nil {
 			panic(e)
-		}
-	}()
-	go func() {
-		if se := s.Serve(lis); se != nil {
-			panic(se)
 		}
 	}()
 
 	t.Cleanup(
 		func() {
-			t.Logf("stopping server listener")
-			s.GracefulStop()
-			// lis.Close()
 			tcancel()
-			t.Logf("cancelled srv context")
-			<-srvDone
-			t.Logf("cleaning up server")
-			s.Stop()
-			t.Logf("done")
-
+			srv.shutdown <- struct{}{}
 		},
 	)
+
 	return srv, lis
 }
 
@@ -160,7 +132,7 @@ func newBadClient(
 	t *testing.T,
 	lis *bufconn.Listener,
 	clientID *string,
-) pb.KeyValueStoreClient {
+) pb.KeyQuarryClient {
 	t.Helper()
 	tctx, tcancel := context.WithTimeout(ctx, 30*time.Second)
 
@@ -180,7 +152,7 @@ func newBadClient(
 	if clientID != nil {
 		dialOpts = append(
 			dialOpts,
-			grpc.WithUnaryInterceptor(kclient.IDInterceptor(*clientID)),
+			grpc.WithPerRPCCredentials(kclient.NewClientIDCredentials(*clientID)),
 		)
 	}
 
@@ -192,6 +164,7 @@ func newBadClient(
 	if err != nil {
 		t.Fatalf("Failed to dial bufnet: %v", err)
 	}
+
 	t.Cleanup(
 		func() {
 			_ = clientConn.Close()
@@ -199,13 +172,13 @@ func newBadClient(
 		},
 	)
 
-	nc := pb.NewKeyValueStoreClient(clientConn)
+	nc := pb.NewKeyQuarryClient(clientConn)
 	return nc
 }
 
 func newClient(
 	t testing.TB,
-	srv *KeyValueStore,
+	srv *Server,
 	lis *bufconn.Listener,
 	clientID string,
 ) *kclient.Client {
@@ -233,27 +206,30 @@ func newClient(
 	if clientID == "" {
 		clientID = t.Name()
 	}
-	clientCfg := kclient.DefaultConfig()
 	handler := slog.NewTextHandler(
 		os.Stdout,
 		&slog.HandlerOptions{AddSource: true, Level: slog.LevelError},
 	)
 	logger := slog.New(handler).WithGroup(fmt.Sprintf("%s-client", t.Name()))
-	clientCfg.Logger = logger
-	clientCfg.Address = "bufnet"
-	clientCfg.NoTLS = true
-	clientCfg.ClientID = clientID
-	if clientCfg.ClientID == "" {
-		clientCfg.ClientID = defaultClientID
-	}
-	client := kclient.NewClient(
-		&clientCfg,
+
+	client := kclient.New(
+		"bufnet",
+		clientID,
+		logger,
+		nil,
 		grpc.WithContextDialer(
 			func(
 				context.Context,
 				string,
 			) (net.Conn, error) {
 				return lis.Dial()
+			},
+		),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithKeepaliveParams(
+			keepalive.ClientParameters{
+				Time:    kclient.DefaultDialKeepAliveTime,
+				Timeout: kclient.DefaultDialKeepAliveTimeout,
 			},
 		),
 	)
@@ -313,6 +289,7 @@ func TestListKeys(t *testing.T) {
 	assertEqual(t, len(keys.Keys), 2, strings.Join(keys.Keys, ", "))
 
 	keys, err = client.ListKeys(ctx, &pb.ListKeysRequest{Limit: 1})
+	fatalOnErr(t, err)
 	assertSliceContainsOneOf(t, keys.Keys, firstKey, secondKey)
 	assertEqual(t, len(keys.Keys), 1)
 
@@ -353,72 +330,6 @@ func TestListKeys(t *testing.T) {
 	)
 	failOnErr(t, err)
 	assertEqual(t, len(keys.Keys), 0)
-}
-
-func TestRunServer(t *testing.T) {
-	tctx, tcancel := context.WithTimeout(ctx, testTimeout)
-	t.Cleanup(
-		func() {
-			tcancel()
-		},
-	)
-
-	cfg := DefaultConfig()
-	cfg.RevisionLimit = 2
-	cfg.MinLifespan = time.Duration(1) * time.Second
-	cfg.MinLockDuration = time.Duration(1) * time.Second
-	cfg.EagerPrune = false
-	cfg.PruneInterval = 0
-	cfg.LogLevel = "ERROR"
-
-	handler := slog.NewTextHandler(
-		os.Stdout,
-		&slog.HandlerOptions{AddSource: true, Level: slog.LevelError},
-	)
-	logger := slog.New(handler).WithGroup(t.Name())
-	slog.SetDefault(logger)
-	cfg.Logger = logger
-
-	srv, err := NewServer(cfg)
-	if err != nil {
-		panic(err)
-	}
-	lis := bufconn.Listen(bufSize)
-
-	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(ClientIDInterceptor(srv)),
-		grpc.KeepaliveEnforcementPolicy(
-			keepalive.EnforcementPolicy{
-				MinTime:             5 * time.Second,
-				PermitWithoutStream: true,
-			},
-		),
-	)
-
-	stopSignal := make(chan struct{}, 1)
-	go func() {
-		_ = RunServer(tctx, grpcServer, lis, srv)
-		stopSignal <- struct{}{}
-	}()
-
-	client := newClient(t, srv, lis, "")
-	_, err = client.Set(
-		ctx,
-		&pb.KeyValue{
-			Key:          "foo",
-			Value:        []byte("bar"),
-			LockDuration: durationpb.New(15 * time.Second),
-		},
-	)
-	fatalOnErr(t, err)
-	tcancel()
-	select {
-	case <-stopSignal:
-		t.Logf("stopped!")
-	case <-time.After(10 * time.Second):
-		t.Fatalf("failed to stop")
-	}
-
 }
 
 func TestUpdateLockedKeyToken(t *testing.T) {
@@ -517,14 +428,96 @@ func TestKeyNotFound(t *testing.T) {
 	assertErrorCode(t, e.Code(), codes.NotFound)
 }
 
-func TestEagerPrune(t *testing.T) {
-	newCfg := DefaultConfig()
-	newCfg.EagerPrune = true
+func TestScheduledPrune(t *testing.T) {
+	// Key limit 50 with prune pruneAt = 0.9 and pruneTo = 0.8, means
+	// once we hit 45 keys, the next pruner run should expunge down to
+	// 40 keys.
+	newCfg := NewConfig()
+	newCfg.LogLevel = "ERROR"
+
+	maxKeys := uint64(50)
+	threshold := uint64(45)
+	target := uint64(40)
+
+	newCfg.MaxNumberOfKeys = maxKeys
+	newCfg.PruneAt = threshold
+	newCfg.PruneTo = target
+
+	pruneAfter := threshold
+	pruneTo := target
+	newCfg.PruneInterval = 1 * time.Second
+	newCfg.EventStreamSendTimeout = 5 * time.Second
+
+	srv, lis := newServer(t, nil, newCfg)
+	srv.cfgMu.RLock()
+	assertEqual(t, srv.cfg.PruneTo, target)
+	srv.cfgMu.RUnlock()
+	client := newClient(t, srv, lis, "")
+
+	srv.mu.RLock()
+	startingKeyCount := srv.numKeys.Load()
+	srv.mu.RUnlock()
+
+	// Create keys up to the pruneAt, +1
+	keysToCreate := int(pruneAfter - startingKeyCount + 1)
+	for i := 0; i < keysToCreate; i++ {
+		k := fmt.Sprintf("key-%d", i+1)
+		kv, err := client.Set(ctx, &pb.KeyValue{Key: k, Value: []byte("bar")})
+		fatalOnErr(t, err)
+		assertEqual(t, kv.IsNew, true)
+		assertEqual(t, kv.Success, true)
+	}
+
+	srv.mu.RLock()
+	currentKeyCt := srv.numKeys.Load()
+	assertEqual(t, currentKeyCt, pruneAfter+1)
+
+	srv.cfgMu.RLock()
+	pressure := srv.pressure()
+	srv.cfgMu.RUnlock()
+	srv.mu.RUnlock()
+
+	assertEqual(t, pressure.Keys, currentKeyCt)
+	assertEqual(t, pressure.Max, maxKeys)
+	assertEqual(t, pressure.Used, 0.92)
+
+	// validate we see the key count drop to the pruneTo 40
+	pruneTimeout, pruneCancel := context.WithTimeout(ctx, 10*time.Second)
+	for {
+		if pruneTimeout.Err() != nil {
+			t.Fatalf("timed out waiting for prune")
+		}
+		ct := srv.numKeys.Load()
+		t.Logf("keys: %d (prune to: %d)", ct, pruneTo)
+		if ct == pruneTo && srv.numPruneCompleted.Load() == 1 {
+			pruneCancel()
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	assertEqual(t, srv.numKeys.Load(), pruneTo)
+
+	// we should see expunges for the number of keys we created
+	// over the pruneTo limit
+	expectedPruneCt := (pruneAfter + 1) - pruneTo
+	assertEqual(t, srv.numEventExpunged.Load(), expectedPruneCt)
+}
+
+func TestEagerPruneFromLock(t *testing.T) {
+	// Validates eager prune behavior when creating keys via
+	// locking with CreateMissing=true
+	// The difference between this and the eager pruning from Set() is that
+	// locked keys aren't pruned, so once we hit the key limit, we'll just
+	// keep getting the same error and no new keys will be created.
+	newCfg := NewConfig()
+
 	newCfg.LogLevel = "ERROR"
 	newCfg.MaxNumberOfKeys = 50
-	newCfg.PruneThreshold = 0.5
+	newCfg.EagerPruneAt = 25
+	newCfg.EagerPruneTo = 22
 	newCfg.MinLifespan = time.Duration(1) * time.Second
 	newCfg.MinLockDuration = time.Duration(1) * time.Second
+	newCfg.MaxLockDuration = 1 * time.Hour
 	newCfg.PruneInterval = 0
 	newCfg.EventStreamSendTimeout = 5 * time.Second
 
@@ -545,7 +538,6 @@ func TestEagerPrune(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	capacityRemaining := maxKeys - startingKeys
-
 	makeNumKeys := capacityRemaining * 2
 
 	keys := make([]string, 0, makeNumKeys)
@@ -553,11 +545,9 @@ func TestEagerPrune(t *testing.T) {
 		keys = append(keys, fmt.Sprintf("key-%d", i+1))
 	}
 	srv.cfgMu.RUnlock()
-	watcher, err := srv.Subscribe(ctx, "foo", nil, nil)
 	fatalOnErr(t, err)
 
 	expungeSeen := map[string]bool{}
-	unexpectedExpunge := []string{}
 	for _, k := range keys[:int(capacityRemaining)] {
 		expungeSeen[k] = false
 	}
@@ -568,64 +558,13 @@ func TestEagerPrune(t *testing.T) {
 		len(expungeSeen),
 		startingKeys,
 	)
-	expectedEvents := maxKeys - startingKeys
-	expungeCt := 0
-	allTrueSignal := make(chan struct{}, 1)
-	go func() {
-		var done bool
-		defer func() {
-			t.Logf("subscriber exited")
-		}()
-		for event := range watcher {
-			if ctx.Err() != nil {
-				break
-			}
-
-			t.Logf("saw event: %+v", event)
-			if done {
-				continue
-			}
-			if event.Event == Expunged {
-				expungeCt++
-				t.Logf("seen %d/%d", expungeCt, expectedEvents)
-				_, ok := expungeSeen[event.Key]
-				if ok {
-					expungeSeen[event.Key] = true
-				} else {
-					unexpectedExpunge = append(unexpectedExpunge, event.Key)
-				}
-				allTrue := true
-				for exp, v := range expungeSeen {
-					if !v {
-						allTrue = false
-						t.Logf("waiting on: %s", exp)
-						break
-					}
-				}
-				if allTrue {
-					done = true
-					allTrueSignal <- struct{}{}
-					t.Logf("sent done signal")
-					t.Logf("unsubscribing")
-					unsubErr := srv.Unsubscribe("foo")
-					if unsubErr != nil {
-						t.Fatalf("failed to unsubscribe: %s", unsubErr.Error())
-					}
-					return
-				}
-			} else {
-				t.Logf("watcher saw non-expunge event %v", event)
-			}
-
-		}
-	}()
 
 	t.Logf("keys to create: %d", len(keys))
 	for ind, k := range keys {
 		// For whatever reason, I'm running into an issue where this test
 		// randomly fails, because one or two keys created report their
 		// LastSet as 1 MILLISECOND after the time created by
-		// `KeyValueStore.pruneNumKeys`... which doesn't make sense, because
+		// `Server.pruneNumKeys`... which doesn't make sense, because
 		// that time.Time is only created on a subsequent key, after having
 		// already hit the key limit. This happens even after ensuring it's
 		// set before emitting the Created signal. Might be something wonky
@@ -634,12 +573,22 @@ func TestEagerPrune(t *testing.T) {
 		t.Logf("checking key %s", k)
 		currentCt := srv.numKeys.Load() // - srv.numReservedKeys.Load()
 		t.Logf("setting %s", k)
-		kset, e := client.Set(ctx, &pb.KeyValue{Key: k, Value: []byte("bar")})
-		fatalOnErr(t, e, fmt.Sprintf("failed on ind %d, key %s", ind, k))
-		t.Logf("set: %v", kset)
+		lockResp, e := client.Lock(
+			ctx,
+			&pb.LockRequest{
+				Key:             k,
+				CreateIfMissing: true,
+				Duration:        durationpb.New(10 * time.Minute),
+			},
+		)
+		t.Logf("lock response: %#v / %v", lockResp, e)
 		afterCt := srv.numKeys.Load()
+		if e != nil && status.Code(e) != codes.ResourceExhausted {
+			fatalOnErr(t, e)
+		}
 
-		if currentCt > maxKeys {
+		switch {
+		case currentCt > maxKeys:
 			t.Fatalf(
 				"exceeded max keys (max: %d current: %d) at %d (%s)",
 				maxKeys,
@@ -647,9 +596,10 @@ func TestEagerPrune(t *testing.T) {
 				ind,
 				k,
 			)
-		} else if currentCt == srv.cfg.MaxNumberOfKeys {
-			assertEqual(t, currentCt, afterCt)
-		} else {
+		case currentCt == maxKeys:
+			assertErrorCode(t, status.Code(e), codes.ResourceExhausted)
+		default:
+			fatalOnErr(t, e)
 			assertEqual(
 				t,
 				afterCt,
@@ -664,33 +614,175 @@ func TestEagerPrune(t *testing.T) {
 			assertEqual(t, err, nil)
 		}
 	}
-	finalCt := srv.numKeys.Load()
-	assertEqual(t, finalCt, maxKeys)
-	time.Sleep(time.Second)
-	t.Logf("waiting on done signal")
-	select {
-	case <-allTrueSignal:
-		//
-	case <-time.After(60 * time.Second):
-		sort.Strings(keys)
-		for _, k := range keys {
-			t.Logf("%s expunged: %t", k, expungeSeen[k])
+
+	eagerPruneCtx, eagerPruneCancel := context.WithTimeout(ctx, 15*time.Second)
+	for {
+		if eagerPruneCtx.Err() != nil {
+			if errors.Is(eagerPruneCtx.Err(), context.DeadlineExceeded) {
+				t.Fatal("timed out waiting for eager prune to finish")
+			}
 		}
-		t.Logf("unexpected expunge: %+v", unexpectedExpunge)
+
+		pruneCompleted := srv.numEagerPruneTriggered.Load()
+		if pruneCompleted > 0 {
+			eagerPruneCancel()
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	eagerTriggered := srv.numEagerPruneTriggered.Load()
+	if eagerTriggered == 0 {
 		t.Fatalf(
-			"timed out waiting for allTrueSignal. current: %+v",
-			expungeSeen,
+			"expected eager prune to be triggered at least once",
 		)
 	}
-	t.Logf("checking stuff")
-	assertEqual(t, expungeCt, int(expectedEvents))
-	assertEqual(t, len(unexpectedExpunge), 0)
-	assertEqual(t, len(expungeSeen), int(maxKeys-startingKeys))
-	for k, v := range expungeSeen {
-		assertEqual(t, v, true, fmt.Sprintf("key: %s", k))
-	}
-	t.Logf("should be finished by now...")
+	finalCt := srv.numKeys.Load()
+	// we should still be at the max number of keys, as they're all either
+	// locked or reserved
+	assertEqual(t, finalCt, 50)
+}
 
+func TestEagerPrune(t *testing.T) {
+	newCfg := NewConfig()
+	newCfg.LogLevel = "ERROR"
+	newCfg.MaxNumberOfKeys = 50
+	newCfg.EagerPruneAt = 25
+	newCfg.EagerPruneTo = 22
+	newCfg.MinLifespan = time.Duration(1) * time.Second
+	newCfg.MinLockDuration = time.Duration(1) * time.Second
+	newCfg.PruneInterval = 0
+	newCfg.EventStreamSendTimeout = 5 * time.Second
+
+	srv, lis := newServer(t, nil, newCfg)
+	client := newClient(t, srv, lis, "")
+
+	resKeys, err := client.ListKeys(
+		ctx,
+		&pb.ListKeysRequest{IncludeReserved: true},
+	)
+	if err != nil {
+		t.Fatalf("failed to list keys: %s", err.Error())
+	}
+	startingKeys := uint64(len(resKeys.Keys))
+	srv.cfgMu.RLock()
+
+	time.Sleep(5 * time.Second)
+
+	capacityRemaining := newCfg.EagerPruneAt - startingKeys
+	makeNumKeys := capacityRemaining * 2
+
+	keys := make([]string, 0, makeNumKeys)
+	for i := 0; i < int(makeNumKeys); i++ {
+		keys = append(keys, fmt.Sprintf("key-%d", i+1))
+	}
+	srv.cfgMu.RUnlock()
+	fatalOnErr(t, err)
+
+	expungeSeen := map[string]bool{}
+	for _, k := range keys[:int(capacityRemaining)] {
+		expungeSeen[k] = false
+	}
+	t.Logf(
+		"capacity remaining: %d / making: %d / expected expunge ct: %d / starting keys: %d",
+		capacityRemaining,
+		makeNumKeys,
+		len(expungeSeen),
+		startingKeys,
+	)
+
+	t.Logf("keys to create: %d", len(keys))
+	var currentCt uint64
+	var afterCt uint64
+	pruneCompletedCt := srv.numPruneCompleted.Load()
+	assertEqual(t, pruneCompletedCt, 0)
+	// var pruneCt uint64 = srv.numPruneCompleted.Load()
+	for _, k := range keys {
+		// For whatever reason, I'm running into an issue where this test
+		// randomly fails, because one or two keys created report their
+		// LastSet as 1 MILLISECOND after the time created by
+		// `Server.pruneNumKeys`... which doesn't make sense, because
+		// that time.Time is only created on a subsequent key, after having
+		// already hit the key limit. This happens even after ensuring it's
+		// set before emitting the Created signal. Might be something wonky
+		// with virtualbox?
+		time.Sleep(50 * time.Millisecond)
+		t.Logf("checking key %s", k)
+		currentCt = srv.numKeys.Load()
+		// if afterCt == newCfg.EagerPruneAt && (int(capacityRemaining) - in{
+		// 	assertEqual(t, currentCt, newCfg.EagerPruneTo+1)
+		// }
+
+		_, e := client.Set(ctx, &pb.KeyValue{Key: k, Value: []byte("bar")})
+		fatalOnErr(t, e)
+
+		// time.Sleep(1 * time.Millisecond)
+		if currentCt == newCfg.EagerPruneAt {
+			pctx, pcancel := context.WithTimeout(ctx, 10*time.Second)
+			for {
+				if pctx.Err() != nil {
+					if errors.Is(pctx.Err(), context.DeadlineExceeded) {
+						t.Fatal("timed out waiting for prune")
+					}
+				}
+				newPruneCt := srv.numPruneCompleted.Load()
+				if newPruneCt > pruneCompletedCt {
+					pcancel()
+					pruneCompletedCt = newPruneCt
+					break
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+		srv.mu.RLock()
+		srv.mu.RUnlock()
+		afterCt = srv.numKeys.Load()
+		if afterCt == currentCt {
+			t.Fatalf("key count didn't change after set")
+		}
+		if afterCt > newCfg.EagerPruneAt {
+			t.Fatalf(
+				"key count exceeded eager prune limit (current: %d, limit: %d)",
+				afterCt,
+				newCfg.EagerPruneAt,
+			)
+		}
+
+		if e != nil && status.Code(e) == codes.ResourceExhausted {
+			break
+		}
+	}
+
+	eagerPruneCtx, eagerPruneCancel := context.WithTimeout(ctx, 15*time.Second)
+	for {
+		if eagerPruneCtx.Err() != nil {
+			if errors.Is(eagerPruneCtx.Err(), context.DeadlineExceeded) {
+				t.Fatal("timed out waiting for eager prune to finish")
+			}
+		}
+
+		pruneCompleted := srv.numPruneCompleted.Load()
+		if pruneCompleted >= 3 {
+			eagerPruneCancel()
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	eagerTriggered := srv.numEagerPruneTriggered.Load()
+	if eagerTriggered != 3 {
+		t.Fatalf(
+			"expected eager prune to be triggered three times, got %d",
+			eagerTriggered,
+		)
+	}
+	prunesCompleted := srv.numPruneCompleted.Load()
+	if prunesCompleted != 3 {
+		t.Fatalf(
+			"expected prune to be completed three times, got %d",
+			prunesCompleted,
+		)
+	}
 }
 
 func TestKeySort(t *testing.T) {
@@ -701,40 +793,31 @@ func TestKeySort(t *testing.T) {
 	futureLock := fooCreated.Add(time.Duration(1) * time.Hour) // locked an hour from now
 	expectedOrder := []string{"bar", "wat", "foo", "baz"}
 
-	keys := []keyWithMetric{
+	keys := []*keyMetricWithName{
 		{
-			kv: &KeyValueInfo{
-				Key: "foo",
-			},
-			metric: &KeyMetrics{
+			Key: "foo",
+			Metric: &keyLifetimeMetric{
 				FirstSet: &fooCreated, // created just now
 				LastSet:  &fooCreated,
 			},
 		},
 		{
-			kv: &KeyValueInfo{
-				Key: "bar",
-			},
-			metric: &KeyMetrics{
+			Key: "bar",
+			Metric: &keyLifetimeMetric{
 				FirstSet: &barCreated, // created 12 hours ago
 				LastSet:  &barCreated,
 			},
 		},
 		{
-			kv: &KeyValueInfo{
-				Key: "wat",
-			},
-			metric: &KeyMetrics{
+			Key: "wat",
+			Metric: &keyLifetimeMetric{
 				FirstSet: &barCreated, // created 12 hours ago
 				LastSet:  &watUpdated, // updated 11 hours ago
 			},
 		},
 		{
-			kv: &KeyValueInfo{
-				Key:     "baz",
-				Created: fooCreated, // created now
-			},
-			metric: &KeyMetrics{
+			Key: "baz",
+			Metric: &keyLifetimeMetric{
 				FirstSet:    &fooCreated, // created 12 hours ago
 				LastSet:     &fooCreated,
 				FirstLocked: &futureLock,
@@ -745,14 +828,14 @@ func TestKeySort(t *testing.T) {
 	scores := map[string]float64{}
 	now := time.Now()
 	for _, k := range keys {
-		scores[k.kv.Key] = k.metric.StaleScore(now)
+		scores[k.Key] = k.Metric.StaleScore(now)
 	}
 	t.Logf("scores: %#v", scores)
 
 	sorted := sortKeyValueInfoByDates(keys)
 	assertEqual(t, len(sorted), len(keys))
 	for ind, k := range sorted {
-		assertEqual(t, k.kv.Key, expectedOrder[ind])
+		assertEqual(t, k, expectedOrder[ind])
 	}
 }
 
@@ -760,10 +843,12 @@ func TestDBSnapshot(t *testing.T) {
 	tmpdir := t.TempDir()
 	dbfile := filepath.Join(tmpdir, "test.db")
 
-	cfg := DefaultConfig()
+	cfg := NewConfig()
 	cfg.Name = t.Name()
 	connStr := fmt.Sprintf("sqlite://%s", dbfile)
 	cfg.Snapshot.Database = connStr
+	cfg.Snapshot.Enabled = true
+	cfg.MaxLockDuration = 1 * time.Hour
 
 	dialect := GetDialect(connStr)
 	if dialect == nil {
@@ -795,7 +880,6 @@ func TestDBSnapshot(t *testing.T) {
 				Key:          "foo",
 				Value:        []byte(fmt.Sprintf("baz-%d", i)),
 				LockDuration: durationpb.New(60 * time.Minute),
-				// Lifespan:     durationpb.New(120 * time.Minute),
 			},
 		)
 		fatalOnErr(t, err)
@@ -811,9 +895,9 @@ func TestDBSnapshot(t *testing.T) {
 	srv.keyStatMu.RLock()
 	srv.cmu.RLock()
 
-	snapshotID, err := srv.snapshotter.DBSnapshot(ctx)
+	snapshotID, err := srv.Snapshot(ctx)
 	fatalOnErr(t, err)
-	db, err := dialect.DBConn(connStr)
+	db, err := dialect.DB(connStr)
 	fatalOnErr(t, err)
 	t.Cleanup(
 		func() {
@@ -860,10 +944,11 @@ func TestLoadDBSnapshot(t *testing.T) {
 	tmpdir := t.TempDir()
 	dbfile := filepath.Join(tmpdir, "test.db")
 
-	cfg := DefaultConfig()
+	cfg := NewConfig()
 	cfg.Name = t.Name()
 	connStr := fmt.Sprintf("sqlite://%s", dbfile)
 	cfg.Snapshot.Database = connStr
+	cfg.Snapshot.Enabled = true
 
 	dialect := GetDialect(connStr)
 	if dialect == nil {
@@ -896,13 +981,13 @@ func TestLoadDBSnapshot(t *testing.T) {
 	srv.keyStatMu.RLock()
 	srv.cmu.RLock()
 
-	snapshotID, err := srv.snapshotter.DBSnapshot(ctx)
+	snapshotID, err := srv.Snapshot(ctx)
 	fatalOnErr(t, err)
 
-	newCfg := DefaultConfig()
+	newCfg := NewConfig()
 	newCfg.Name = t.Name()
 	newCfg.Snapshot.Database = connStr
-	newSrv, err := ServerFromDB(ctx, newCfg)
+	newSrv, err := serverFromDB(ctx, newCfg)
 	fatalOnErr(t, err)
 	kv, exists := newSrv.store[fooKV.Key]
 	if !exists {
@@ -911,7 +996,7 @@ func TestLoadDBSnapshot(t *testing.T) {
 
 	assertSlicesEqual(t, kv.Value, fooKV.Value)
 
-	db, err := dialect.DBConn(connStr)
+	db, err := dialect.DB(connStr)
 	fatalOnErr(t, err)
 
 	rec, err := dialect.GetSnapshot(ctx, db, snapshotID)
@@ -919,23 +1004,16 @@ func TestLoadDBSnapshot(t *testing.T) {
 	assertEqual(t, rec.ServerName, cfg.Name)
 	assertEqual(t, rec.ID, snapshotID)
 	assertEqual(t, rec.Created.IsZero(), false)
-
 }
 
 func TestKeyHistory(t *testing.T) {
-	srv, lis := newServer(t, nil, nil)
-	originalHistoryConfig := srv.cfg.RevisionLimit
-	t.Cleanup(
-		func() {
-			srv.cfg.RevisionLimit = originalHistoryConfig
-		},
-	)
+	cfg := NewConfig()
 	var newRevisionLimit int64 = 3
+	cfg.RevisionLimit = newRevisionLimit
+	cfg.PersistentRevisions = true
+	srv, lis := newServer(t, nil, cfg)
 
 	client := newClient(t, srv, lis, "")
-	srv.cfgMu.Lock()
-	srv.cfg.RevisionLimit = newRevisionLimit
-	srv.cfgMu.Unlock()
 
 	k := &pb.KeyValue{Key: "foo", Value: []byte("bar")}
 	originalValue := k.Value
@@ -944,12 +1022,15 @@ func TestKeyHistory(t *testing.T) {
 
 	keyInfo, ok := srv.store[k.Key]
 	assertEqual(t, ok, true)
-	assertNotNil(t, keyInfo.History)
+	srv.hmu.RLock()
+	assertNotNil(t, srv.history[k.Key])
 	// the value should be on the store only, with no history
-	assertEqual(t, keyInfo.History.Length(), 0)
+	assertEqual(t, len(srv.history[k.Key]), 1)
+	srv.hmu.RUnlock()
 
 	versions := map[int][]byte{}
 	versions[0] = originalValue
+
 	// create a few revisions, with a value including the expected version
 	for i := 0; i < int(newRevisionLimit); i++ {
 		newValue := []byte(fmt.Sprintf("%s-%d", string(originalValue), i+1))
@@ -957,9 +1038,10 @@ func TestKeyHistory(t *testing.T) {
 		_, err = client.Set(ctx, k)
 		failOnErr(t, err)
 	}
-	assertEqual(t, keyInfo.History.Length(), int(newRevisionLimit))
+	srv.hmu.RLock()
+	assertEqual(t, len(srv.history[k.Key]), int(newRevisionLimit))
 	versionsSeen := map[uint64]bool{}
-	for _, v := range keyInfo.History.List() {
+	for _, v := range srv.history[k.Key] {
 		_, seen := versionsSeen[v.Version]
 		if seen {
 			t.Fatalf("found duplicate version %d", v.Version)
@@ -967,51 +1049,63 @@ func TestKeyHistory(t *testing.T) {
 		versionsSeen[v.Version] = true
 	}
 
-	firstRevision, found := keyInfo.History.Version(1)
+	_, v1Found := versionsSeen[1]
+	if v1Found {
+		t.Errorf("expected to not see version 1 in: %+v", versionsSeen)
+	}
+
+	_, v2Found := versionsSeen[2]
+	if !v2Found {
+		t.Fatalf("expected to see version 1 in: %+v", versionsSeen)
+	}
+
+	secondRevision, found := srv.getVersion(keyInfo.Key, 2)
 	if !found {
 		t.Fatal("expected to find version 1")
 	}
-	assertNotNil(t, firstRevision)
-	assertNotNil(t, firstRevision.Version)
-	assertEqual(t, firstRevision.Version, 1)
-	assertSlicesEqual(t, firstRevision.Value, originalValue)
+	assertNotNil(t, secondRevision)
+	assertNotNil(t, secondRevision.Version)
+	assertEqual(t, secondRevision.Version, 2)
+	// assertSlicesEqual(t, secondRevision.Value, originalValue)
 
-	var previousRevision *KeyValueSnapshot
+	var previousRevision *keyValueSnapshot
 
-	for ind, rev := range keyInfo.History.List() {
+	for ind, rev := range srv.history[keyInfo.Key] {
 		rev := rev
-		assertEqual(t, rev.Version, uint64(ind+1))
+		assertEqual(t, rev.Version, uint64(ind+2))
 
 		assertEqual(t, rev.Timestamp.IsZero(), false)
 		if previousRevision != nil {
 			assertEqual(t, rev.Version-1, previousRevision.Version)
-			expectedVal := fmt.Sprintf("%s-%d", string(originalValue), ind)
+			expectedVal := fmt.Sprintf("%s-%d", string(originalValue), ind+1)
 			currentVal := string(rev.Value)
 			assertEqual(t, currentVal, expectedVal)
 		}
 		previousRevision = rev
 	}
-	currentVal, err := client.Get(ctx, &pb.Key{Key: k.Key})
-	failOnErr(t, err)
+
+	srv.hmu.RUnlock()
 
 	k.Value = []byte("final")
 	_, err = client.Set(ctx, k)
-	failOnErr(t, err)
+	fatalOnErr(t, err)
 
-	assertEqual(t, keyInfo.History.Length(), int(newRevisionLimit))
-	hist := keyInfo.History.List()
+	srv.hmu.RLock()
+	assertEqual(t, len(srv.history[keyInfo.Key]), int(newRevisionLimit))
+	hist := srv.history[keyInfo.Key]
 	for i := 0; i < len(hist); i++ {
-		assertNotEqual(t, hist[i], firstRevision)
+		assertNotEqual(t, hist[i], secondRevision)
 	}
-	assertSlicesEqual(
+	assertEqual(
 		t,
-		hist[len(hist)-1].Value,
-		currentVal.Value,
+		string(hist[len(hist)-1].Value),
+		string(k.Value),
 	)
 
+	srv.hmu.RUnlock()
 	_, err = client.ClearHistory(ctx, &pb.EmptyRequest{})
 	failOnErr(t, err)
-	assertEqual(t, keyInfo.History.Length(), 0)
+	assertEqual(t, len(srv.history[keyInfo.Key]), 0)
 }
 
 func TestLockUnknownKey(t *testing.T) {
@@ -1135,7 +1229,6 @@ func TestUpdateExpiration(t *testing.T) {
 	failOnErr(t, err)
 
 	srv.mu.RLock()
-	// srv.reaperMu.RLock()
 
 	kvData, ok := srv.store[key]
 	if !ok {
@@ -1305,7 +1398,116 @@ func TestEmptyClientID(t *testing.T) {
 	assertNotNil(t, err)
 	e, _ := status.FromError(err)
 	assertErrorCode(t, e.Code(), codes.InvalidArgument)
+}
 
+func TestLifespan(t *testing.T) {
+	srv, lis := newServer(t, nil, nil)
+	client := newClient(t, srv, lis, "")
+
+	key := "foo"
+
+	_, err := client.Set(
+		ctx,
+		&pb.KeyValue{
+			Key:      key,
+			Value:    []byte("bar"),
+			Lifespan: durationpb.New(DefaultMinLifespan),
+		},
+	)
+	fatalOnErr(t, err)
+
+	expCtx, expCancel := context.WithTimeout(
+		ctx,
+		DefaultMinLifespan*2,
+	)
+	for {
+		if expCtx.Err() != nil {
+			t.Fatalf("timed out waiting for key to expire")
+		}
+
+		_, err = client.Get(expCtx, &pb.Key{Key: key})
+		if err != nil {
+			errorCode := status.Code(err)
+			if errorCode != codes.NotFound {
+				t.Fatalf("expected NotFound, got %s", errorCode.String())
+			}
+			expCancel()
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func TestLifespanRenew(t *testing.T) {
+	srv, lis := newServer(t, nil, nil)
+	client := newClient(t, srv, lis, "")
+
+	key := "foo"
+
+	_, err := client.Set(
+		ctx,
+		&pb.KeyValue{
+			Key:      key,
+			Value:    []byte("bar"),
+			Lifespan: durationpb.New(DefaultMinLifespan * 10),
+		},
+	)
+	fatalOnErr(t, err)
+
+	srv.reaperMu.RLock()
+	reaper, exists := srv.reapers[key]
+	if !exists {
+		srv.reaperMu.RUnlock()
+		t.Fatalf("expected reaper for key %s", key)
+	}
+
+	reaperID := reaper.ID
+	srv.reaperMu.RUnlock()
+
+	if reaperID == "" {
+		t.Fatalf("expected reaper ID to be set, got %s", reaperID)
+	}
+
+	_, err = client.Set(ctx, &pb.KeyValue{Key: key, Value: []byte("baz")})
+	fatalOnErr(t, err)
+
+	srv.reaperMu.RLock()
+	reaper, exists = srv.reapers[key]
+
+	if !exists {
+		srv.reaperMu.RUnlock()
+		t.Fatalf("expected reaper for key %s", key)
+	}
+	assertEqual(t, reaper.renewals.Load(), 1)
+	newID := reaper.ID
+	srv.reaperMu.RUnlock()
+	if newID == reaperID {
+		t.Fatalf("expected reaper ID to change, got %s", reaperID)
+	}
+
+	_, err = client.Set(
+		ctx,
+		&pb.KeyValue{
+			Key:      key,
+			Value:    []byte("bar"),
+			Lifespan: durationpb.New(DefaultMinLifespan * 20),
+		},
+	)
+	fatalOnErr(t, err)
+
+	srv.reaperMu.RLock()
+	reaper, exists = srv.reapers[key]
+
+	if !exists {
+		srv.reaperMu.RUnlock()
+		t.Fatalf("expected reaper for key %s", key)
+	}
+	assertEqual(t, reaper.renewals.Load(), 2)
+	lastID := reaper.ID
+	srv.reaperMu.RUnlock()
+	if lastID == reaperID || lastID == newID {
+		t.Fatalf("expected reaper ID to change, got %s", lastID)
+	}
 }
 
 func TestReadLockedKey(t *testing.T) {
@@ -1365,7 +1567,7 @@ func TestReadLockedKey(t *testing.T) {
 }
 
 func TestKeyMetrics(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := NewConfig()
 	cfg.LogLevel = "DEBUG"
 	cfg.LogEvents = true
 	srv, lis := newServer(t, nil, cfg)
@@ -1382,9 +1584,18 @@ func TestKeyMetrics(t *testing.T) {
 	deleteSeen := make(chan struct{}, 1)
 	lockSeen := make(chan struct{}, 1)
 
-	eventCh, err := srv.Subscribe(ctx, "test_watcher", nil, nil)
+	watcherName := "test_watcher"
+	eventCh, err := srv.Subscribe(ctx, watcherName, nil, nil)
 	fatalOnErr(t, err)
 
+	t.Cleanup(
+		func() {
+			unsubErr := srv.Unsubscribe(watcherName)
+			if unsubErr != nil {
+				t.Logf("error unsubscribing: %s", unsubErr.Error())
+			}
+		},
+	)
 	go func() {
 		for ev := range eventCh {
 			t.Logf("saw event: %+v (%d)", ev, ev.Time.UnixNano())
@@ -1394,6 +1605,7 @@ func TestKeyMetrics(t *testing.T) {
 			if ev.Key != key {
 				continue
 			}
+			//goland:noinspection GoSwitchMissingCasesForIotaConsts
 			switch ev.Event {
 			case Created, Updated:
 				setSeen <- struct{}{}
@@ -1405,12 +1617,17 @@ func TestKeyMetrics(t *testing.T) {
 				lockSeen <- struct{}{}
 			}
 		}
+		t.Logf("event channel closed")
 	}()
+
+	srv.eventStream.mu.RLock()
+	t.Logf("workers: %+v", srv.eventStream.workers)
+	srv.eventStream.mu.RUnlock()
 
 	// set the value, validate set count=1, everything else is zero
 	_, err = client.Set(ctx, &pb.KeyValue{Key: key, Value: []byte("bar")})
 	fatalOnErr(t, err)
-	waitTimer = time.NewTimer(10 * time.Second)
+	waitTimer = time.NewTimer(20 * time.Second)
 	select {
 	case <-setSeen:
 	//
@@ -1479,7 +1696,7 @@ func TestKeyMetrics(t *testing.T) {
 	waitTimer = time.NewTimer(10 * time.Second)
 	select {
 	case <-getSeen:
-	//
+		//
 	case <-waitTimer.C:
 		t.Fatalf("timed out waiting for get event")
 	}
@@ -1616,7 +1833,7 @@ func TestKeyMetrics(t *testing.T) {
 }
 
 func TestSubscriberLimit(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := NewConfig()
 	cfg.EventStreamSubscriberLimit = 3
 	srv, lis := newServer(t, nil, cfg)
 
@@ -1760,8 +1977,8 @@ func TestKeyValueStore(t *testing.T) {
 		ctx,
 		&pb.ListKeysRequest{IncludeReserved: true},
 	)
+	fatalOnErr(t, err)
 	startKeyCt := uint64(len(startKeys.Keys))
-	failOnErr(t, err)
 	assertEqual(t, srv.numKeys.Load(), startKeyCt)
 
 	// Set a Key-value pair
@@ -1930,11 +2147,17 @@ func TestEvents(t *testing.T) {
 	srv, lis := newServer(t, nil, nil)
 	client := newClient(t, srv, lis, "")
 
-	x, err := srv.Subscribe(ctx, "x", []string{"foo"}, nil)
+	xSubscriberName := "x"
+	ySubscriberName := "y"
+	zSubscriberName := "z"
+
+	x, err := srv.Subscribe(ctx, xSubscriberName, []string{"foo"}, nil)
 	failOnErr(t, err)
-	y, err := srv.Subscribe(ctx, "y", []string{"foo"}, nil)
+
+	y, err := srv.Subscribe(ctx, ySubscriberName, []string{"foo"}, nil)
 	failOnErr(t, err)
-	z, err := srv.Subscribe(ctx, "z", []string{"foo"}, nil)
+
+	z, err := srv.Subscribe(ctx, zSubscriberName, []string{"foo"}, nil)
 	failOnErr(t, err)
 
 	xResults := make([]Event, 0, 5)
@@ -2013,6 +2236,10 @@ func TestEvents(t *testing.T) {
 		}
 	}()
 
+	srv.eventStream.mu.RLock()
+	t.Logf("workers: %+v", srv.eventStream.workers)
+	srv.eventStream.mu.RUnlock()
+
 	foo := &pb.KeyValue{Key: "foo", Value: []byte("bar")}
 	fooUpdate := &pb.KeyValue{Key: "foo", Value: []byte("baz")}
 	_, err = client.Set(ctx, foo)
@@ -2058,7 +2285,7 @@ func TestEvents(t *testing.T) {
 func TestMarshal(t *testing.T) {
 	srv, lis := newServer(t, nil, nil)
 	client := newClient(t, srv, lis, "")
-	originalKeys := []string{}
+	var originalKeys []string
 	d := time.Duration(3600) * time.Second
 	for i := 0; i < 50; i++ {
 		k := &pb.KeyValue{
@@ -2081,7 +2308,7 @@ func TestMarshal(t *testing.T) {
 	t.Logf("data:\n%s", data)
 
 	// Create a separate server, unmarshal the first server's data into it
-	newStore, err := NewServer(&Config{})
+	newStore, err := New(&Config{})
 	fatalOnErr(t, err)
 	t.Logf("unmarshaling to new store")
 	newStore.mu.Lock()
@@ -2094,7 +2321,7 @@ func TestMarshal(t *testing.T) {
 
 	fatalOnErr(t, err)
 
-	newKeys := []string{}
+	var newKeys []string
 	for k := range newStore.store {
 		newKeys = append(newKeys, k)
 	}
@@ -2105,7 +2332,7 @@ func TestMarshal(t *testing.T) {
 	for keyName, keyInfo := range srv.store {
 		t.Logf("checking key: %s", keyName)
 		otherKeyInfo := newStore.store[keyName]
-		if strings.HasPrefix(keyName, reservedPrefix) {
+		if strings.HasPrefix(keyName, ReservedKeyPrefix) {
 			if otherKeyInfo != nil {
 				t.Fatalf("key %s found in new store", keyName)
 			}
@@ -2147,7 +2374,6 @@ func TestMarshal(t *testing.T) {
 		assertTimesEqual(t, firstStats.LastAccessed, otherStats.LastAccessed)
 		assertTimesEqual(t, firstStats.LastLocked, otherStats.LastLocked)
 		assertTimesEqual(t, firstStats.LastSet, otherStats.LastSet)
-
 	}
 }
 
@@ -2170,7 +2396,7 @@ func assertTimesEqual(t *testing.T, t1 *time.Time, expected *time.Time) {
 }
 
 func TestGetRevision(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := NewConfig()
 	cfg.RevisionLimit = 10
 
 	srv, lis := newServer(t, nil, cfg)
@@ -2216,13 +2442,16 @@ func TestGetRevision(t *testing.T) {
 		kvInfo := srv.store[key]
 		srv.mu.RUnlock()
 		kvInfo.mu.RLock()
+
 		currentVersion := kvInfo.Version
-		revs := kvInfo.History.Length()
-		allVersions := []string{}
-		for _, v := range kvInfo.History.List() {
+		srv.hmu.RLock()
+		revs := len(srv.history[kvInfo.Key])
+		var allVersions []string
+		for _, v := range srv.history[kvInfo.Key] {
 			allVersions = append(allVersions, fmt.Sprintf("%d", v.Version))
 		}
 		kvInfo.mu.RUnlock()
+		srv.hmu.RUnlock()
 		t.Fatalf(
 			"expected error, got nil (current version: %d, history length: %d, all versions: %s)",
 			currentVersion,
@@ -2232,6 +2461,98 @@ func TestGetRevision(t *testing.T) {
 	}
 	assertErrorCode(t, status.Code(err), codes.NotFound)
 
+}
+
+func TestPersistentHistory(t *testing.T) {
+	var revisionLimit int64 = 3
+	srv, lis := newServer(
+		t, nil, &Config{
+			RevisionLimit:             revisionLimit,
+			PersistentRevisions:       true,
+			KeepKeyHistoryAfterDelete: true,
+		},
+	)
+	client := newClient(t, srv, lis, "")
+
+	key := "foo"
+
+	// initial value should have version 1 and immediately go into the history
+	_, err := client.Set(ctx, &pb.KeyValue{Key: key, Value: []byte("bar")})
+	fatalOnErr(t, err)
+
+	srv.hmu.RLock()
+	history, exists := srv.history[key]
+	if !exists {
+		t.Fatalf("expected history for key '%s'", key)
+	}
+	expectedHistoryCount := 1
+	assertEqual(t, len(history), expectedHistoryCount)
+	assertEqual(t, cap(history), int(revisionLimit))
+	assertEqual(t, history[0].Version, 1)
+	srv.hmu.RUnlock()
+
+	insp, err := client.Inspect(ctx, &pb.InspectRequest{Key: key})
+	fatalOnErr(t, err)
+	assertEqual(t, insp.Version, 1)
+
+	// updating the value should increment to 2, also go into the history
+	_, err = client.Set(ctx, &pb.KeyValue{Key: key, Value: []byte("baz")})
+	fatalOnErr(t, err)
+	expectedHistoryCount++
+
+	insp, err = client.Inspect(ctx, &pb.InspectRequest{Key: key})
+	fatalOnErr(t, err)
+	assertEqual(t, insp.Version, 2)
+
+	srv.hmu.RLock()
+	history, exists = srv.history[key]
+	if !exists {
+		t.Fatalf("expected history for key '%s'", key)
+	}
+	assertEqual(t, len(history), expectedHistoryCount)
+	assertEqual(t, cap(history), int(revisionLimit))
+
+	mostRecentVersion := history[len(history)-1].Version
+	assertEqual(t, mostRecentVersion, insp.Version)
+
+	srv.hmu.RUnlock()
+
+	// deleting the value should retain the history entry
+	_, err = client.Delete(ctx, &pb.DeleteRequest{Key: key})
+	fatalOnErr(t, err)
+
+	srv.hmu.RLock()
+	history, exists = srv.history[key]
+	if !exists {
+		t.Fatalf("expected history for key '%s'", key)
+	}
+	assertEqual(t, len(history), expectedHistoryCount)
+	assertEqual(t, cap(history), int(revisionLimit))
+	mostRecentVersion = history[len(history)-1].Version
+	assertEqual(t, mostRecentVersion, 2)
+	srv.hmu.RUnlock()
+
+	// setting the value again should be 'new' but the version should
+	// reflect the most recent version in the history + 1
+	_, err = client.Set(ctx, &pb.KeyValue{Key: key, Value: []byte("baz")})
+	fatalOnErr(t, err)
+	expectedHistoryCount++
+
+	insp, err = client.Inspect(ctx, &pb.InspectRequest{Key: key})
+	fatalOnErr(t, err)
+	assertEqual(t, insp.Version, 3)
+
+	srv.hmu.RLock()
+	history, exists = srv.history[key]
+	if !exists {
+		t.Fatalf("expected history for key '%s'", key)
+	}
+	assertEqual(t, len(history), expectedHistoryCount)
+	assertEqual(t, cap(history), int(revisionLimit))
+	mostRecentVersion = history[len(history)-1].Version
+	assertEqual(t, mostRecentVersion, 3)
+
+	srv.hmu.RUnlock()
 }
 
 func TestMaxValueSize(t *testing.T) {
@@ -2324,7 +2645,7 @@ func assertSlicesEqual[V comparable](t testing.TB, value []V, expected []V) {
 	t.Helper()
 	if len(value) != len(expected) {
 		t.Fatalf(
-			"expected %d elements, got %d\n%v\n%v",
+			"expected %d elements, got %d\n%+v\n%+v",
 			len(expected),
 			len(value),
 			value,
@@ -2335,7 +2656,7 @@ func assertSlicesEqual[V comparable](t testing.TB, value []V, expected []V) {
 	for i, v := range value {
 		if v != expected[i] {
 			t.Errorf(
-				"index %d: expected:\n%#v\n\ngot:\n%#v",
+				"index %d: expected:\n%+v\n\ngot:\n%+v",
 				i,
 				expected,
 				value,
@@ -2369,7 +2690,9 @@ func requireSliceContains[V comparable](
 	}
 }
 
-func assertSliceContains[V comparable](t testing.TB, value []V, expected ...V) {
+func assertSliceContains[V comparable](
+	t testing.TB, value []V, expected ...V,
+) {
 	t.Helper()
 	found := map[V]bool{}
 	if len(expected) == 0 {
@@ -2496,4 +2819,102 @@ func TestGetServerMetric(t *testing.T) {
 	data, err := json.Marshal(m)
 	fatalOnErr(t, err)
 	t.Logf("stats: %s", string(data))
+}
+
+func TestStopExpirationTimers(t *testing.T) {
+	srv, lis := newServer(t, nil, nil)
+	client := newClient(t, srv, lis, "")
+	var keys []string
+	lifespan := 10 * time.Minute
+	for i := 0; i < 10; i++ {
+		k := fmt.Sprintf("foo-%d", i)
+		// keys = append(keys, k)
+		keys = append(keys, k)
+		_, err := client.Set(
+			ctx, &pb.KeyValue{
+				Key:      k,
+				Value:    []byte("bar"),
+				Lifespan: durationpb.New(lifespan),
+			},
+		)
+		fatalOnErr(t, err)
+	}
+	assertEqual(t, srv.numReapers.Load(), 10)
+
+	srv.reaperMu.RLock()
+	var reaperKeys []string
+	var reapers []*reaper
+	assertEqual(t, len(srv.reapers), 10)
+
+	for r := range srv.reapers {
+		reaperKeys = append(reaperKeys, r)
+		reapers = append(reapers, srv.reapers[r])
+		assertNotNil(t, srv.reapers[r].t)
+	}
+
+	for _, k := range keys {
+		assertSliceContains(t, reaperKeys, k)
+	}
+	srv.reaperMu.RUnlock()
+	srv.reaperMu.Lock()
+	srv.stopExpirationTimers()
+	srv.reaperMu.Unlock()
+
+	srv.reaperMu.RLock()
+	assertEqual(t, len(srv.reapers), 10)
+	assertEqual(t, srv.numReapers.Load(), 10)
+	srv.reaperMu.RUnlock()
+
+	for _, r := range reapers {
+		assertEqual(t, r.t, nil)
+	}
+}
+
+func TestStopUnlockTimers(t *testing.T) {
+	srv, lis := newServer(t, nil, nil)
+	client := newClient(t, srv, lis, "")
+	var keys []string
+	lockDuration := 10 * time.Minute
+	for i := 0; i < 10; i++ {
+		k := fmt.Sprintf("foo-%d", i)
+		// keys = append(keys, k)
+		keys = append(keys, k)
+		_, err := client.Set(
+			ctx, &pb.KeyValue{
+				Key:          k,
+				Value:        []byte("bar"),
+				LockDuration: durationpb.New(lockDuration),
+			},
+		)
+		fatalOnErr(t, err)
+	}
+	assertEqual(t, srv.numLocks.Load(), 10)
+
+	srv.lockMu.RLock()
+	var lockKeys []string
+	var locks []*kvLock
+	assertEqual(t, len(srv.locks), 10)
+
+	for r := range srv.locks {
+		lockKeys = append(lockKeys, r)
+		locks = append(locks, srv.locks[r])
+		assertNotNil(t, srv.locks[r].t)
+	}
+
+	for _, k := range keys {
+		assertSliceContains(t, lockKeys, k)
+	}
+	srv.lockMu.RUnlock()
+	srv.lockMu.Lock()
+	srv.stopUnlockTimers()
+	srv.lockMu.Unlock()
+
+	srv.lockMu.RLock()
+	assertEqual(t, len(srv.locks), 10)
+	assertEqual(t, srv.numLocks.Load(), 10)
+	srv.lockMu.RUnlock()
+
+	for _, r := range locks {
+		assertEqual(t, r.t, nil)
+	}
 }

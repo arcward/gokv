@@ -80,4 +80,4 @@ EXPOSE 33969
 
 VOLUME /app/snapshots
 
-ENTRYPOINT ["keyquarry", "server"]
+ENTRYPOINT ["keyquarry", "serve"]

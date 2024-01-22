@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+option go_package = "github.com/arcward/keyquarry/api";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+package keyquarry;
+
+service Admin {
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+  rpc Prune(PruneRequest) returns (PruneResponse);
+}
+
+message ShutdownRequest {}
+message ShutdownResponse {}
+
+message PruneRequest {
+  uint64 prune_to = 1;
+  repeated string ignore_keys = 2;
+
+}
+
+message PruneResponse {
+  uint64 pruned = 1;
+}

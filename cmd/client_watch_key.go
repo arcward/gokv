@@ -33,7 +33,6 @@ var watchKeyCmd = &cobra.Command{
 			if ev != nil {
 				fmt.Printf("%s\n", ev)
 			}
-			fmt.Printf("saw event: %s %#v\n", ev.KeyEvent, ev.KeyEvent)
 			switch *ev.KeyEvent.Enum() {
 			case pb.KeyEvent_DELETED, pb.KeyEvent_EXPIRED, pb.KeyEvent_EXPUNGED:
 				return

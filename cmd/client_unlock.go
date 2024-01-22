@@ -15,9 +15,7 @@ var unlockCmd = &cobra.Command{
 		opts := &cliOpts
 		kv, err := opts.client.Unlock(
 			ctx,
-			&pb.UnlockRequest{
-				Key: key,
-			},
+			&pb.UnlockRequest{Key: key},
 		)
 		printError(err)
 		printResult(kv)

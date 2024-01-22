@@ -8,46 +8,41 @@ import (
 	"time"
 )
 
-// KeyValueInfo is the internal representation of a key-value pair and
+// keyValue is the internal representation of a key-value pair and
 // associated metadata.
-type KeyValueInfo struct {
-	Key         string       `json:"key"`
-	Value       []byte       `json:"value"`
-	ContentType string       `json:"content_type,omitempty"`
-	Size        uint64       `json:"-"`
-	Hash        uint64       `json:"hash,omitempty"`
-	Created     time.Time    `json:"created,omitempty"`
-	Updated     time.Time    `json:"updated,omitempty"`
-	Version     uint64       `json:"version,omitempty"`
-	History     *KVHistory   `json:"-"`
-	mu          sync.RWMutex `json:"-"`
-	CreatedBy   string       `json:"created_by"`
+type keyValue struct {
+	Key         string    `json:"key"`
+	Value       []byte    `json:"value"`
+	ContentType string    `json:"content_type,omitempty"`
+	Size        uint64    `json:"-"`
+	Hash        uint64    `json:"hash,omitempty"`
+	Created     time.Time `json:"created,omitempty"`
+	Updated     time.Time `json:"updated,omitempty"`
+	Version     uint64    `json:"version,omitempty"`
+	// History     *keyValueHistory `json:"-"`
+	CreatedBy string `json:"created_by"`
+	mu        sync.RWMutex
 }
 
-func NewKeyValue(
-	srv *KeyValueStore,
+// newKeyValue initializes a new keyValue
+func newKeyValue(
 	key string,
 	value []byte,
 	contentType string,
 	clientID string,
-	revisionLimit int64,
-) *KeyValueInfo {
+) *keyValue {
 	now := time.Now()
 	hashChannel := make(chan uint64, 1)
 
 	go func() {
 		hashFunc := fnv.New64a()
-		_, he := hashFunc.Write(value)
-		if he != nil {
-			srv.logger.Error(
-				"error hashing value",
-				"error", he,
-			)
+		if _, he := hashFunc.Write(value); he != nil {
+			slog.Warn("error hashing value", "error", he, "key", key)
 		}
 		hashChannel <- hashFunc.Sum64()
 	}()
 
-	kvInfo := &KeyValueInfo{
+	kvInfo := &keyValue{
 		Key:       key,
 		Value:     value,
 		Created:   now,
@@ -56,20 +51,18 @@ func NewKeyValue(
 		CreatedBy: clientID,
 	}
 
-	if revisionLimit > 0 {
-		kvInfo.History = NewKVHistory(revisionLimit)
-	}
-
-	if contentType == "" && value != nil {
+	switch {
+	case contentType == "" && value != nil:
 		kvInfo.ContentType = http.DetectContentType(kvInfo.Value)
-	} else {
+	default:
 		kvInfo.ContentType = contentType
 	}
+
 	kvInfo.Hash = <-hashChannel
 	return kvInfo
 }
 
-func (kv *KeyValueInfo) LogValue() slog.Value {
+func (kv *keyValue) LogValue() slog.Value {
 	attrs := make([]slog.Attr, 0, 8)
 	attrs = append(attrs, slog.String("key", kv.Key))
 	attrs = append(attrs, slog.Uint64("version", kv.Version))
@@ -83,68 +76,22 @@ func (kv *KeyValueInfo) LogValue() slog.Value {
 	return slog.GroupValue(attrs...)
 }
 
-// KeyValueSnapshot is a snapshot of a key-value pair and associated info
-type KeyValueSnapshot struct {
+// keyValueSnapshot is a snapshot of a key-value pair and associated info
+type keyValueSnapshot struct {
 	Key         string    `json:"key"`
-	Version     uint64    `json:"version"`
 	Value       []byte    `json:"value"`
 	ContentType string    `json:"content_type,omitempty"`
-	Timestamp   time.Time `json:"timestamp"`
 	Size        uint64    `json:"size"`
 	Hash        uint64    `json:"hash,omitempty"`
+	Version     uint64    `json:"version"`
+	Timestamp   time.Time `json:"timestamp"`
 }
 
-type KVHistory struct {
-	snapshots []*KeyValueSnapshot
-	maxLen    int64
-}
-
-// Version returns the snapshot for the given revision number
-func (h *KVHistory) Version(v uint64) (*KeyValueSnapshot, bool) {
-	for i := 0; i < len(h.snapshots); i++ {
-		s := h.snapshots[i]
-		if s.Version == v {
-			return s, true
-		}
-	}
-	return nil, false
-}
-
-// RelativeVersion returns the snapshot for the given revision number. If
-// the number of positive, returns that revision, if it exists. If negative,
-// returns the revision that many from the end, if it exists (ex: if the current
-// version is 10, -1 would return version 9). The second boolean will return
-// false if the version does not exist.
-func (h *KVHistory) RelativeVersion(v int64) (*KeyValueSnapshot, bool) {
-	if v < 0 {
-		v = int64(len(h.snapshots)) + v
-	}
-	targetVersion := uint64(v)
-	for i := 0; i < len(h.snapshots); i++ {
-		keySnapshot := h.snapshots[i]
-		if keySnapshot.Version == targetVersion {
-			return keySnapshot, true
-		}
-	}
-	return nil, false
-}
-
-func (h *KVHistory) Append(snapshot *KeyValueSnapshot) {
-	if h.maxLen > 0 && int64(len(h.snapshots)) == h.maxLen {
-		for i := 0; i < int(h.maxLen)-1; i++ {
-			h.snapshots[i] = h.snapshots[i+1]
-		}
-		h.snapshots[h.maxLen-1] = snapshot
-		return
-	}
-	h.snapshots = append(h.snapshots, snapshot)
-}
-
-func (h *KVHistory) Add(kv *KeyValueInfo) {
+func newKeySnapshot(kv *keyValue) *keyValueSnapshot {
 	size := len(kv.Value)
 	value := make([]byte, size)
 	copy(value, kv.Value)
-	snapshot := &KeyValueSnapshot{
+	return &keyValueSnapshot{
 		Timestamp:   time.Now(),
 		Key:         kv.Key,
 		Size:        uint64(size),
@@ -153,28 +100,21 @@ func (h *KVHistory) Add(kv *KeyValueInfo) {
 		Hash:        kv.Hash,
 		Value:       value,
 	}
-	h.Append(snapshot)
 }
 
-func (h *KVHistory) Clear() int64 {
-	items := len(h.snapshots)
-	if h.maxLen > 0 {
-		h.snapshots = make([]*KeyValueSnapshot, 0, h.maxLen)
-	} else {
-		h.snapshots = make([]*KeyValueSnapshot, 0)
-	}
-	return int64(items)
-}
-
-func (h *KVHistory) List() []*KeyValueSnapshot {
-	return h.snapshots[:]
-}
-
-func (h *KVHistory) Length() int {
-	return len(h.snapshots)
-}
-
-type KeyMetrics struct {
+// keyLifetimeMetric tracks some basic metadata for a key, persisting
+// between deletes, expunges, etc. If a key `foo` is created with a
+// lifespan of 1 hour and is eventually deleted, then a client creates
+// a new key `foo` 2 hours later, the new key will have a `first_set`
+// time of 2 hours ago, and a `first_accessed` time of 2 hours ago, as
+// this metadata isn't deleted along with the key. This is primarily used
+// to help determine which keys to [Expunge] first - a key may have a
+// relatively short lifespan, but be recreated/accessed frequently, in which
+// case we may want to keep it around.
+type keyLifetimeMetric struct {
+	// AccessCount is the number of times the key has been accessed, either
+	// via [Server.Get], [Server.Inspect] (with include_value=true),
+	// [Server.Pop], or pushed via [Server.WatchKeyValue]
 	AccessCount   uint64     `json:"access_count"`
 	FirstAccessed *time.Time `json:"first_accessed,omitempty"`
 	LastAccessed  *time.Time `json:"last_accessed,omitempty"`
@@ -190,7 +130,11 @@ type KeyMetrics struct {
 	mu sync.RWMutex
 }
 
-func (k *KeyMetrics) StaleScore(t time.Time) float64 {
+// StaleScore returns a score for how "stale" the key is. The higher the score,
+// the more stale the key is. The score is calculated by taking the inverse of
+// the number of hours since the key was last accessed, set, created, or locked.
+// This score is used by [pruner] to determine which keys to [Expunge] first.
+func (k *keyLifetimeMetric) StaleScore(t time.Time) float64 {
 	var accessScore float64
 	var updateScore float64
 	var createScore float64
@@ -233,7 +177,7 @@ func (k *KeyMetrics) StaleScore(t time.Time) float64 {
 	return total
 }
 
-func (k *KeyMetrics) LogValue() slog.Value {
+func (k *keyLifetimeMetric) LogValue() slog.Value {
 	attrs := []slog.Attr{
 		slog.Uint64("access_count", k.AccessCount),
 		slog.Uint64("set_count", k.SetCount),
@@ -258,63 +202,4 @@ func (k *KeyMetrics) LogValue() slog.Value {
 		attrs = append(attrs, slog.Time("last_locked", *k.LastLocked))
 	}
 	return slog.GroupValue(attrs...)
-}
-
-func (k *KeyMetrics) LocksPerHour() float64 {
-	var lockRate float64
-	if k.FirstLocked == nil {
-		return lockRate
-	}
-	td := k.LastLocked.Sub(*k.FirstLocked).Hours()
-	if td > 0 {
-		lockRate = float64(k.LockCount) / td
-	}
-	return lockRate
-}
-
-func (k *KeyMetrics) AccessPerHour() float64 {
-	var accessRate float64
-	if k.FirstAccessed == nil {
-		return accessRate
-	}
-	td := k.LastAccessed.Sub(*k.FirstAccessed).Hours()
-	if td > 0 {
-		accessRate = float64(k.AccessCount) / td
-	}
-	return accessRate
-}
-
-func (k *KeyMetrics) SetPerHour() float64 {
-	var setRate float64
-
-	td := k.LastSet.Sub(*k.FirstSet).Hours()
-	if td > 0 {
-		setRate = float64(k.SetCount) / td
-	}
-	return setRate
-}
-
-func (k *KeyMetrics) AccessToSetRatio() float64 {
-	var ratio float64
-	if k.SetCount > 0 {
-		ratio = float64(k.AccessCount) / float64(k.SetCount)
-	}
-	return ratio
-}
-
-func NewKVHistory(maxLen int64) *KVHistory {
-	if maxLen == 0 {
-		return nil
-	}
-
-	if maxLen == -1 {
-		return &KVHistory{
-			snapshots: make([]*KeyValueSnapshot, 0),
-			maxLen:    maxLen,
-		}
-	}
-	return &KVHistory{
-		snapshots: make([]*KeyValueSnapshot, 0, maxLen),
-		maxLen:    maxLen,
-	}
 }

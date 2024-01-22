@@ -7,7 +7,7 @@ import "google/protobuf/duration.proto";
 
 package keyquarry;
 
-service KeyValueStore {
+service KeyQuarry {
   // Set sets a key/value pair. If the key already exists,
   // it will be updated. If the key already exists and is
   // locked, an error will be returned. If the key already
@@ -119,50 +119,109 @@ message ListKeysRequest {
   bool include_reserved = 3; // true to include reserved keys
 }
 
+// ServerMetrics describes the current state of the server
 message ServerMetrics {
-  optional uint64 keys = 1;  // Number of keys in the store
-  optional uint64 total_size = 2;  // Total size of all values in the store
+  // Keys is the current number of keys in the store
+  optional uint64 keys = 1;
+  // TotalSize is the sum (in bytes) of the current value sizes for all keys
+  // in the store
+  optional uint64 total_size = 2;
+  // CurrentLocks is the current number of active locks
   optional uint64 current_locks = 3;
+  // ClientIds is the number of registered clients
   optional uint64 client_ids = 4;
+  // Reapers is the current number of active reapers
   optional uint64 reapers = 5;
+  // EventSubscribers is the current number of active event subscribers
   optional uint64 event_subscribers = 6;
+  // SnapshotsCreated is the number of snapshots created since the server started
   optional uint64 snapshots_created = 7;
-  EventMetrics events = 8;
-  KeyPressure pressure = 9;
+  // EagerPruneTriggered is the number of times an eager prune was triggered
+  // due to a request to create a new key while the store is at capacity
+  optional uint64 eager_prune_triggered = 8;
+  // PruneCompleted is the number of times the pruning job ran,
+  // while over the configured prune threshold
+  optional uint64 prune_completed = 9;
+  EventMetrics events = 10;
+  KeyPressure pressure = 11;
+  HistoryMetrics history = 12;
 }
 
-message EventMetrics {
-  optional uint64 new = 1;  // Number of get requests
-  optional uint64 updated = 2;  // Number of set requests
-  optional uint64 deleted = 3;  // Number of delete requests
-  optional uint64 locked = 4;  // Number of exists requests
-  optional uint64 unlocked = 5;  // Number of list keys requests
-  optional uint64 expired = 6;  // Number of new keys set
-  optional uint64 expunged = 7;  // Number of keys updated
-  optional uint64 accessed = 8;
-  optional uint64 lifespan_set = 9;
-}
-message KeyPressure {
+message HistoryMetrics {
   optional uint64 keys = 1;
+  optional uint64 revisions = 2;
+}
+
+// EventMetrics includes counts of KeyEvent types seen
+message EventMetrics {
+  // New is the number of new keys created
+  optional uint64 new = 1;
+  // Updated is the number of times an existing key's value was updated
+  optional uint64 updated = 2;
+  // Deleted is the number of delete events
+  optional uint64 deleted = 3;
+  // Locked is the number of times a key was locked
+  optional uint64 locked = 4;
+  // Unlocked is the number of times a key was unlocked
+  optional uint64 unlocked = 5;
+  // Expired is the number of times a key expired
+  optional uint64 expired = 6;
+  // Expunged is the number of times a key was expunged/pruned
+  optional uint64 expunged = 7;
+  // Accessed is the number of times a key's value was accessed,
+  // either by a Set, Pop, or Inspect with include_value=true request
+  optional uint64 accessed = 8;
+  // LifespanSet is the number of times a key lifespan was initially
+  // set, or an existing lifespan was changed
+  optional uint64 lifespan_set = 9;
+  // LifespanRenewed is the number of times a key's lifespan was
+  // extended via an update to the key value, or by setting
+  // the lifespan on an existing key to its current lifespan value
+  optional uint64 lifespan_renewed = 10;
+}
+
+// KeyPressure represents the pressure on the key store,
+// which is the current number of keys as related to the
+// configured maximum, and prune settings
+message KeyPressure {
+  // Keys is the current number of keys in the store
+  optional uint64 keys = 1;
+  // Max is the configured maximum number of keys (Config.MaxNumberOfKeys)
   optional uint64 max = 2;
+  // Used is the current number of keys divided by the maximum number of keys
   optional float used = 3;
-  optional float prune_threshold = 4;
-  optional int64 keys_over_threshold = 5;
+
 }
 
 
 // KeyValue represents a key/value pair
 message KeyValue {
-  string key = 1;  // Key of value
-  bytes value = 2;  // Value associated with the key
+  // Key is a unique identifier for this key-value pair. If the key already
+  // exists, its value will be updated, as long as there's no active lock
+  // by another client.
+  string key = 1;
+  // Value to associate with the key.
+  bytes value = 2;
+  // Content type to set. If not set, the content type will be inferred from
+  // the value.
   string content_type = 3;
-  optional google.protobuf.Duration lock_duration = 4;  // Lock options
+  // LockDuration either sets a new lock for the key with the
+  // provided duration, or updates the duration of an existing lock.
+  // If a lock exists under another client, an error will be returned.
+  optional google.protobuf.Duration lock_duration = 4;
+  // Lifespan is a duration after which the key will be automatically
+  // deleted. This overrides any existing lock (so if you lock a key
+  // for longer than its lifespan, it will be deleted before the lock
+  // expires).
+  // Subsequent updates to the key will reset the lifespan timer. If
+  // you specify a lifespan on a key that already has a lifespan, the
+  // new lifespan will be used.
   optional google.protobuf.Duration lifespan = 5;  // Expiration options
 }
 
-
-
-// UnlockRequest represents a request to unlock a key
+// UnlockRequest represents a request to unlock a key. If the key
+// is not already locked, nothing will happen. If the key is locked
+// by another client, an error will be returned.
 message UnlockRequest {
   string key = 1;
 }
@@ -174,9 +233,13 @@ message UnlockResponse {
 
 // LockRequest represents a request to lock a key
 message LockRequest {
-  string key = 1; // Key to lock
-  google.protobuf.Duration duration = 2; // Time to lock in seconds (0 for no unlock)
-  bool create_if_missing = 3; // true to create the key if it doesn't exist
+  // Key is the key to lock
+  string key = 1;
+  // Duration to lock the key, after which it will automatically unlock.
+  google.protobuf.Duration duration = 2;
+  // CreateIfMissing will create the key with an empty value, if it doesn't
+  // already exist.
+  bool create_if_missing = 3;
 }
 
 // LockResponse indicates whether a key was locked
@@ -194,10 +257,10 @@ message ClearHistoryResponse {
   int64 cleared = 2;  // Number of history entries cleared
 }
 
-// GetKeyValueInfoResponse represents the metadata for a key/value pair
+// InspectResponse represents the metadata for a key/value pair
 message InspectResponse {
   string key = 1 ; // Key of value
-  uint64 hash = 2; // MD5 hash of value
+  uint64 hash = 2; // Hash is the FNV hash of the value
   google.protobuf.Timestamp created = 3;  // Unix timestamp of when the key was created
   optional google.protobuf.Timestamp updated = 4;  // Unix timestamp of when the key was last updated
   uint64 version = 5;  // Version of the key (incremented on each update)
@@ -214,39 +277,66 @@ message KeyMetricRequest {
   string key = 1;
 }
 
+// KeyMetric provides counters and timestamps for
+// access/set/lock operations for the global lifetime
+// of a key. These metrics survive key deletions/expirations/etc,
+// as well as server restarts if snapshotting is enabled.
 message KeyMetric {
+  // AccessCount is the number of times the value
+  // of the key has been accessed, either via
+  // Get, Pop, or Inspect with include_value=true
   uint64 access_count = 1;
+  // FirstAccessed is the timestamp of the first time
+  // the key value was accessed
   google.protobuf.Timestamp first_accessed = 2;
+  // LastAccessed is the timestamp of the most recent
+  // access
   google.protobuf.Timestamp last_accessed = 3;
+  // SetCount is the number of times the value has been
+  // set or updated
   uint64 set_count = 4;
+  // FirstSet is the timestamp of the first time the value
+  // of the key was set.
   google.protobuf.Timestamp first_set = 5;
+  // LastSet is the timestamp of the most recent time
+  // the value was set or updated.
   google.protobuf.Timestamp last_set = 6;
+  // LockCount is the number of times the key has been locked.
   uint64 lock_count = 7;
+  // FirstLocked is the timestamp of the first time the key was locked
   google.protobuf.Timestamp first_locked = 8;
+  // LastLocked is the timestamp of the most recent time the key was locked
   google.protobuf.Timestamp last_locked = 9;
 }
 
+// KeyEvent reflects the type of event that occurred for a key
 enum KeyEvent {
   NO_EVENT = 0;
-  CREATED = 1;
-  UPDATED = 2;
-  DELETED = 3;
-  EXPIRED = 4;
-  LOCKED = 5;
-  UNLOCKED = 6;
-  EXPUNGED = 7;
-  ACCESSED = 8;
-  LIFESPAN_SET = 9;
+  CREATED = 1; // Key was created
+  UPDATED = 2; // Key value was updated
+  DELETED = 3; // Key was deleted
+  EXPIRED = 4; // Key expired
+  LOCKED = 5; // Key was locked
+  UNLOCKED = 6; // Key was unlocked
+  EXPUNGED = 7; // Key was expunged/pruned
+  ACCESSED = 8; // Key value was accessed
+  LIFESPAN_SET = 9; // Key lifespan was set
+  LIFESPAN_RENEWED = 10; // Key lifespan was renewed via an update to the key value
 }
 
+// Event is a KeyEvent for an key, with additional context
 message Event {
+  // Key is the key that the event occurred for
   string key = 1;
+  // KeyEvent is the type of event
   KeyEvent event = 2;
+  // Time is the time the event occurred
   google.protobuf.Timestamp time = 3;
+  // ClientId is the client that triggered the event, or
+  // 'keyquarry' for an internally-triggered event such
+  // as Expired
   string client_id = 4;
 }
-
-
 
 // Key represents only a key
 message Key {
@@ -255,13 +345,17 @@ message Key {
 
 message InspectRequest {
   string key = 1;
+  // IncludeValue, if true, includes the value of the
+  // key in the response
   bool include_value = 2;
+  // IncludeMetrics, if true, includes the KeyMetric for the key
   bool include_metrics = 3;
 }
 
 message ClearRequest {
   bool force = 1; // true to clear locked keys
 }
+
 // ClearResponse indicates whether the store was cleared, and how many keys were deleted
 message ClearResponse {
   bool success = 1;  // true if the store was cleared

@@ -2,15 +2,8 @@ package client
 
 import (
 	"context"
-	"crypto/tls"
 	"github.com/arcward/keyquarry/api"
-	"github.com/google/uuid"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/keepalive"
-	"google.golang.org/grpc/metadata"
-	"log"
 	"log/slog"
 	"time"
 )
@@ -22,26 +15,49 @@ const (
 )
 
 type Client struct {
-	client   api.KeyValueStoreClient
-	conn     *grpc.ClientConn
-	cfg      Config
-	callOpts []grpc.CallOption
-	dialOpts []grpc.DialOption
-	logger   *slog.Logger
+	id            string
+	serverAddress string
+	client        api.KeyQuarryClient
+	adminClient   api.AdminClient
+	conn          *grpc.ClientConn
+	callOpts      []grpc.CallOption
+	dialOpts      []grpc.DialOption
+	logger        *slog.Logger
 }
 
-func (c *Client) DialOpts() []grpc.DialOption {
-	return c.cfg.DialOpts()
-}
 func (c *Client) requestLogger(ctx context.Context) *slog.Logger {
 	return c.logger.With(
 		slog.String("remote", c.conn.Target()),
-		slog.String("client_id", c.cfg.ClientID),
 	)
 }
 
-func (c *Client) Config() Config {
-	return c.cfg
+func (c *Client) Shutdown(
+	ctx context.Context,
+	in *api.ShutdownRequest,
+	opts ...grpc.CallOption,
+) (*api.ShutdownResponse, error) {
+	logger := c.requestLogger(ctx)
+	logger.Info("shutting down server")
+	opts = append(opts, c.callOpts...)
+	rv, err := c.adminClient.Shutdown(ctx, in, opts...)
+	return rv, err
+}
+
+func (c *Client) Prune(
+	ctx context.Context,
+	in *api.PruneRequest,
+	opts ...grpc.CallOption,
+) (*api.PruneResponse, error) {
+	logger := c.requestLogger(ctx)
+	logger.Info("triggering prune")
+	opts = append(opts, c.callOpts...)
+	rv, err := c.adminClient.Prune(ctx, in, opts...)
+	logger.Info(
+		"prune response",
+		slog.Any("response", rv),
+		slog.Any("error", err),
+	)
+	return rv, err
 }
 
 func (c *Client) Set(
@@ -264,9 +280,10 @@ func (c *Client) SetReadOnly(
 ) (*api.ReadOnlyResponse, error) {
 	logger := c.requestLogger(ctx)
 	opts = append(opts, c.callOpts...)
-	if in.Enable {
+	switch {
+	case in.Enable:
 		logger.Info("attempting to set read-only mode")
-	} else {
+	default:
 		logger.Info("attempting to disable read-only mode")
 	}
 
@@ -295,184 +312,66 @@ func (c *Client) Unlock(
 	return rv, err
 }
 
-type Config struct {
-	Address    string       `json:"address"`
-	Logger     *slog.Logger `json:"-"`
-	Verbose    bool         `json:"verbose"`
-	CACert     string       `json:"ca_certfile"`
-	Quiet      bool         `json:"quiet"`
-	IndentJSON int          `json:"indent_json"`
-	ClientID   string       `mapstructure:"client_id"`
-
-	// DialTimeout is the timeout for failing to establish a connection.
-	DialTimeout time.Duration `json:"dial-timeout"`
-
-	// DialKeepAliveTime is the time after which client pings the server to see if
-	// transport is alive.
-	DialKeepAliveTime time.Duration `json:"dial-keep-alive-time"`
-
-	// DialKeepAliveTimeout is the time that the client waits for a response for the
-	// keep-alive probe. If the response is not received in this time, the connection is closed.
-	DialKeepAliveTimeout time.Duration `json:"dial-keep-alive-timeout"`
-
-	InsecureSkipVerify bool `json:"insecure"`
-	NoTLS              bool `json:"no_tls"`
-	ExtraDialOpts      []grpc.DialOption
-}
-
-func (c Config) LogValue() slog.Value {
-	return slog.GroupValue(
-		slog.String("address", c.Address),
-		slog.Bool("verbose", c.Verbose),
-		slog.String("ca_certfile", c.CACert),
-		slog.Bool("quiet", c.Quiet),
-		slog.Int("indent_json", c.IndentJSON),
-		// slog.String("client_id", c.ClientID),
-		slog.Duration("dial_timeout", c.DialTimeout),
-		slog.Duration("dial_keep_alive_time", c.DialKeepAliveTime),
-		slog.Duration("dial_keep_alive_timeout", c.DialKeepAliveTimeout),
-		slog.Bool("insecure", c.InsecureSkipVerify),
-		slog.Bool("no_tls", c.NoTLS),
-	)
-}
-
-func (c Config) DialOpts() []grpc.DialOption {
-	opts := []grpc.DialOption{
-		grpc.WithKeepaliveParams(
-			keepalive.ClientParameters{
-				Time:    c.DialKeepAliveTime,
-				Timeout: c.DialKeepAliveTimeout,
-			},
-		),
-	}
-
-	if c.NoTLS {
-		if c.Logger == nil {
-			slog.Warn("TLS is disabled")
-		} else {
-			c.Logger.Warn("TLS is disabled")
-		}
-		insc := grpc.WithTransportCredentials(insecure.NewCredentials())
-		opts = append(opts, insc)
-	} else {
-		tlsSet := false
-		if c.CACert != "" {
-			creds, err := credentials.NewClientTLSFromFile(
-				c.CACert,
-				"",
-			)
-			if err != nil {
-				log.Fatalln(err)
-			}
-			opts = append(
-				opts,
-				grpc.WithTransportCredentials(creds),
-			)
-			tlsSet = true
-		}
-		if c.InsecureSkipVerify {
-			tlsConfig := &tls.Config{InsecureSkipVerify: true}
-			creds := credentials.NewTLS(tlsConfig)
-			opts = append(
-				opts,
-				grpc.WithTransportCredentials(creds),
-			)
-			tlsSet = true
-		}
-		if !tlsSet {
-
-			opts = append(
-				opts,
-				grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})),
-			)
-		}
-	}
-	opts = append(
-		opts,
-		grpc.WithUnaryInterceptor(IDInterceptor(c.ClientID)),
-		grpc.WithStreamInterceptor(IDStreamInterceptor(c.ClientID)),
-	)
-	if c.ExtraDialOpts != nil {
-		opts = append(opts, c.ExtraDialOpts...)
-	}
-	return opts
-}
-
-func DefaultConfig() Config {
-	cfg := Config{
-		DialTimeout:          DefaultDialTimeout,
-		DialKeepAliveTime:    DefaultDialKeepAliveTime,
-		DialKeepAliveTimeout: DefaultDialKeepAliveTimeout,
-		NoTLS:                true,
-		Logger:               slog.Default().With("logger", "client"),
-	}
-	return cfg
-}
-
-func NewClient(cfg *Config, opts ...grpc.DialOption) *Client {
-	defaultConfig := DefaultConfig()
-	if cfg == nil {
-		cfg = &defaultConfig
-	}
-	cfg.ExtraDialOpts = opts
-	client := &Client{cfg: *cfg}
-
-	if cfg.Logger == nil {
-		cfg.Logger = defaultConfig.Logger
-	}
-	if cfg.ClientID == "" {
-		cfg.ClientID = uuid.NewString()
-		cfg.Logger.Info(
-			"generated client ID",
-			slog.String("client_id", cfg.ClientID),
+// New returns a new instance of Client with the given configuration.
+func New(
+	address string,
+	clientID string,
+	logger *slog.Logger,
+	callOpts []grpc.CallOption,
+	dialOpts ...grpc.DialOption,
+) *Client {
+	if logger == nil {
+		logger = slog.Default().With(
+			"logger", "client",
+			"remote", address,
+			"client_id", clientID,
 		)
 	}
-
-	cfg.Logger = cfg.Logger.With("client_id", cfg.ClientID)
-	client.logger = cfg.Logger
-
-	if cfg.DialKeepAliveTime == 0 {
-		cfg.DialKeepAliveTime = defaultConfig.DialKeepAliveTime
+	dialOpts = append(
+		dialOpts,
+		grpc.WithPerRPCCredentials(NewClientIDCredentials(clientID)),
+	)
+	client := &Client{
+		id:            clientID,
+		serverAddress: address,
+		logger:        logger,
+		callOpts:      callOpts,
+		dialOpts:      dialOpts,
 	}
-	if cfg.DialKeepAliveTimeout == 0 {
-		cfg.DialKeepAliveTimeout = defaultConfig.DialKeepAliveTimeout
-	}
-
 	return client
 }
 
-func IDInterceptor(clientID string) grpc.UnaryClientInterceptor {
-	return func(
-		ctx context.Context,
-		method string,
-		req, reply interface{},
-		cc *grpc.ClientConn,
-		invoker grpc.UnaryInvoker,
-		opts ...grpc.CallOption,
-	) error {
-		ctx = metadata.AppendToOutgoingContext(ctx, "client_id", clientID)
-		return invoker(ctx, method, req, reply, cc, opts...)
-	}
+func (c *Client) ServerAddress() string {
+	return c.serverAddress
 }
 
-func IDStreamInterceptor(clientID string) grpc.StreamClientInterceptor {
-	return func(
-		ctx context.Context,
-		desc *grpc.StreamDesc,
-		cc *grpc.ClientConn,
-		method string,
-		streamer grpc.Streamer,
-		opts ...grpc.CallOption,
-	) (grpc.ClientStream, error) {
-		ctx = metadata.AppendToOutgoingContext(ctx, "client_id", clientID)
-		return streamer(ctx, desc, cc, method, opts...)
-	}
+// ClientIDCredentials implements the credentials.PerRPCCredentials interface,
+// adding the client ID to the request metadata. Thi
+type ClientIDCredentials struct {
+	clientID string
+}
+
+func (c *ClientIDCredentials) GetRequestMetadata(
+	ctx context.Context,
+	uri ...string,
+) (map[string]string, error) {
+	return map[string]string{"client_id": c.clientID}, nil
+}
+
+func (c *ClientIDCredentials) RequireTransportSecurity() bool {
+	return false
+}
+
+// NewClientIDCredentials returns a new instance of ClientIDCredentials
+// with the given client ID.
+func NewClientIDCredentials(clientID string) *ClientIDCredentials {
+	return &ClientIDCredentials{clientID: clientID}
 }
 
 func (c *Client) WatchKeyValue(
 	ctx context.Context,
 	in *api.WatchKeyValueRequest,
-) (api.KeyValueStore_WatchKeyValueClient, error) {
+) (api.KeyQuarry_WatchKeyValueClient, error) {
 	logger := c.requestLogger(ctx)
 	opts := append(c.callOpts, grpc.MaxCallRecvMsgSize(1024*1024*1024))
 	stream, err := c.client.WatchKeyValue(ctx, in, opts...)
@@ -489,7 +388,7 @@ func (c *Client) WatchKeyValue(
 func (c *Client) WatchStream(
 	ctx context.Context,
 	in *api.WatchRequest,
-) (api.KeyValueStore_WatchStreamClient, error) {
+) (api.KeyQuarry_WatchStreamClient, error) {
 	logger := c.requestLogger(ctx)
 	opts := append(c.callOpts, grpc.MaxCallRecvMsgSize(1024*1024*1024))
 	stream, err := c.client.WatchStream(ctx, in, opts...)
@@ -535,7 +434,6 @@ func (c *Client) CloseConnection() error {
 func (c *Client) Dial(
 	ctx context.Context,
 	register bool,
-	dialOpts ...grpc.DialOption,
 ) error {
 	if c.conn != nil {
 		if e := c.conn.Close(); e != nil {
@@ -545,25 +443,24 @@ func (c *Client) Dial(
 			)
 		}
 	}
-	c.logger.Info("connecting", "config", c.cfg)
-	opts := c.cfg.DialOpts()
-	opts = append(opts, dialOpts...)
+	c.logger.Info("connecting")
+
 	conn, err := grpc.DialContext(
 		ctx,
-		c.cfg.Address,
-		opts...,
+		c.serverAddress,
+		c.dialOpts...,
 	)
 	if err != nil {
 		c.logger.Error(
 			"error connecting",
 			"error", err,
-			"config", c.cfg,
 		)
 		return err
 	}
-	c.logger.Info("Connected", slog.String("address", c.cfg.Address))
+	c.logger.Info("Connected")
 	c.conn = conn
-	c.client = api.NewKeyValueStoreClient(conn)
+	c.client = api.NewKeyQuarryClient(conn)
+	c.adminClient = api.NewAdminClient(conn)
 	if register {
 		reg, regErr := c.Register(ctx, &api.RegisterRequest{})
 		if regErr != nil {

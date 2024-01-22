@@ -30,10 +30,7 @@ var setReadonlyCmd = &cobra.Command{
 			Enable: enable,
 		}
 		opts := &cliOpts
-		kv, err := opts.client.SetReadOnly(
-			ctx,
-			req,
-		)
+		kv, err := opts.client.SetReadOnly(ctx, req)
 		printError(err)
 		printResult(kv)
 		return nil

@@ -18,10 +18,10 @@ import (
 // Requires gRPC-Go v1.32.0 or later.
 const _ = grpc.SupportPackageIsVersion7
 
-// KeyValueStoreClient is the client API for KeyValueStore service.
+// KeyQuarryClient is the client API for KeyQuarry service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type KeyValueStoreClient interface {
+type KeyQuarryClient interface {
 	// Set sets a key/value pair. If the key already exists,
 	// it will be updated. If the key already exists and is
 	// locked, an error will be returned. If the key already
@@ -62,160 +62,160 @@ type KeyValueStoreClient interface {
 	GetRevision(ctx context.Context, in *GetRevisionRequest, opts ...grpc.CallOption) (*RevisionResponse, error)
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	SetReadOnly(ctx context.Context, in *ReadOnlyRequest, opts ...grpc.CallOption) (*ReadOnlyResponse, error)
-	WatchStream(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (KeyValueStore_WatchStreamClient, error)
+	WatchStream(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (KeyQuarry_WatchStreamClient, error)
 	GetKeyMetric(ctx context.Context, in *KeyMetricRequest, opts ...grpc.CallOption) (*KeyMetric, error)
-	WatchKeyValue(ctx context.Context, in *WatchKeyValueRequest, opts ...grpc.CallOption) (KeyValueStore_WatchKeyValueClient, error)
+	WatchKeyValue(ctx context.Context, in *WatchKeyValueRequest, opts ...grpc.CallOption) (KeyQuarry_WatchKeyValueClient, error)
 }
 
-type keyValueStoreClient struct {
+type keyQuarryClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewKeyValueStoreClient(cc grpc.ClientConnInterface) KeyValueStoreClient {
-	return &keyValueStoreClient{cc}
+func NewKeyQuarryClient(cc grpc.ClientConnInterface) KeyQuarryClient {
+	return &keyQuarryClient{cc}
 }
 
-func (c *keyValueStoreClient) Set(ctx context.Context, in *KeyValue, opts ...grpc.CallOption) (*SetResponse, error) {
+func (c *keyQuarryClient) Set(ctx context.Context, in *KeyValue, opts ...grpc.CallOption) (*SetResponse, error) {
 	out := new(SetResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Set", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/Set", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Get(ctx context.Context, in *Key, opts ...grpc.CallOption) (*GetResponse, error) {
+func (c *keyQuarryClient) Get(ctx context.Context, in *Key, opts ...grpc.CallOption) (*GetResponse, error) {
 	out := new(GetResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Get", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/Get", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Inspect(ctx context.Context, in *InspectRequest, opts ...grpc.CallOption) (*InspectResponse, error) {
+func (c *keyQuarryClient) Inspect(ctx context.Context, in *InspectRequest, opts ...grpc.CallOption) (*InspectResponse, error) {
 	out := new(InspectResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Inspect", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/Inspect", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error) {
+func (c *keyQuarryClient) Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error) {
 	out := new(DeleteResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Delete", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/Delete", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Exists(ctx context.Context, in *Key, opts ...grpc.CallOption) (*ExistsResponse, error) {
+func (c *keyQuarryClient) Exists(ctx context.Context, in *Key, opts ...grpc.CallOption) (*ExistsResponse, error) {
 	out := new(ExistsResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Exists", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/Exists", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Pop(ctx context.Context, in *PopRequest, opts ...grpc.CallOption) (*GetResponse, error) {
+func (c *keyQuarryClient) Pop(ctx context.Context, in *PopRequest, opts ...grpc.CallOption) (*GetResponse, error) {
 	out := new(GetResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Pop", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/Pop", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Clear(ctx context.Context, in *ClearRequest, opts ...grpc.CallOption) (*ClearResponse, error) {
+func (c *keyQuarryClient) Clear(ctx context.Context, in *ClearRequest, opts ...grpc.CallOption) (*ClearResponse, error) {
 	out := new(ClearResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Clear", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/Clear", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) ListKeys(ctx context.Context, in *ListKeysRequest, opts ...grpc.CallOption) (*ListKeysResponse, error) {
+func (c *keyQuarryClient) ListKeys(ctx context.Context, in *ListKeysRequest, opts ...grpc.CallOption) (*ListKeysResponse, error) {
 	out := new(ListKeysResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/ListKeys", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/ListKeys", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Stats(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ServerMetrics, error) {
+func (c *keyQuarryClient) Stats(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ServerMetrics, error) {
 	out := new(ServerMetrics)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Stats", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/Stats", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) ClearHistory(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ClearHistoryResponse, error) {
+func (c *keyQuarryClient) ClearHistory(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ClearHistoryResponse, error) {
 	out := new(ClearHistoryResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/ClearHistory", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/ClearHistory", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Lock(ctx context.Context, in *LockRequest, opts ...grpc.CallOption) (*LockResponse, error) {
+func (c *keyQuarryClient) Lock(ctx context.Context, in *LockRequest, opts ...grpc.CallOption) (*LockResponse, error) {
 	out := new(LockResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Lock", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/Lock", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Unlock(ctx context.Context, in *UnlockRequest, opts ...grpc.CallOption) (*UnlockResponse, error) {
+func (c *keyQuarryClient) Unlock(ctx context.Context, in *UnlockRequest, opts ...grpc.CallOption) (*UnlockResponse, error) {
 	out := new(UnlockResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Unlock", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/Unlock", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) GetRevision(ctx context.Context, in *GetRevisionRequest, opts ...grpc.CallOption) (*RevisionResponse, error) {
+func (c *keyQuarryClient) GetRevision(ctx context.Context, in *GetRevisionRequest, opts ...grpc.CallOption) (*RevisionResponse, error) {
 	out := new(RevisionResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/GetRevision", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/GetRevision", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error) {
+func (c *keyQuarryClient) Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error) {
 	out := new(RegisterResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/Register", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/Register", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) SetReadOnly(ctx context.Context, in *ReadOnlyRequest, opts ...grpc.CallOption) (*ReadOnlyResponse, error) {
+func (c *keyQuarryClient) SetReadOnly(ctx context.Context, in *ReadOnlyRequest, opts ...grpc.CallOption) (*ReadOnlyResponse, error) {
 	out := new(ReadOnlyResponse)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/SetReadOnly", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/SetReadOnly", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) WatchStream(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (KeyValueStore_WatchStreamClient, error) {
-	stream, err := c.cc.NewStream(ctx, &KeyValueStore_ServiceDesc.Streams[0], "/keyquarry.KeyValueStore/WatchStream", opts...)
+func (c *keyQuarryClient) WatchStream(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (KeyQuarry_WatchStreamClient, error) {
+	stream, err := c.cc.NewStream(ctx, &KeyQuarry_ServiceDesc.Streams[0], "/keyquarry.KeyQuarry/WatchStream", opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &keyValueStoreWatchStreamClient{stream}
+	x := &keyQuarryWatchStreamClient{stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -225,16 +225,16 @@ func (c *keyValueStoreClient) WatchStream(ctx context.Context, in *WatchRequest,
 	return x, nil
 }
 
-type KeyValueStore_WatchStreamClient interface {
+type KeyQuarry_WatchStreamClient interface {
 	Recv() (*Event, error)
 	grpc.ClientStream
 }
 
-type keyValueStoreWatchStreamClient struct {
+type keyQuarryWatchStreamClient struct {
 	grpc.ClientStream
 }
 
-func (x *keyValueStoreWatchStreamClient) Recv() (*Event, error) {
+func (x *keyQuarryWatchStreamClient) Recv() (*Event, error) {
 	m := new(Event)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
@@ -242,21 +242,21 @@ func (x *keyValueStoreWatchStreamClient) Recv() (*Event, error) {
 	return m, nil
 }
 
-func (c *keyValueStoreClient) GetKeyMetric(ctx context.Context, in *KeyMetricRequest, opts ...grpc.CallOption) (*KeyMetric, error) {
+func (c *keyQuarryClient) GetKeyMetric(ctx context.Context, in *KeyMetricRequest, opts ...grpc.CallOption) (*KeyMetric, error) {
 	out := new(KeyMetric)
-	err := c.cc.Invoke(ctx, "/keyquarry.KeyValueStore/GetKeyMetric", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/keyquarry.KeyQuarry/GetKeyMetric", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *keyValueStoreClient) WatchKeyValue(ctx context.Context, in *WatchKeyValueRequest, opts ...grpc.CallOption) (KeyValueStore_WatchKeyValueClient, error) {
-	stream, err := c.cc.NewStream(ctx, &KeyValueStore_ServiceDesc.Streams[1], "/keyquarry.KeyValueStore/WatchKeyValue", opts...)
+func (c *keyQuarryClient) WatchKeyValue(ctx context.Context, in *WatchKeyValueRequest, opts ...grpc.CallOption) (KeyQuarry_WatchKeyValueClient, error) {
+	stream, err := c.cc.NewStream(ctx, &KeyQuarry_ServiceDesc.Streams[1], "/keyquarry.KeyQuarry/WatchKeyValue", opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &keyValueStoreWatchKeyValueClient{stream}
+	x := &keyQuarryWatchKeyValueClient{stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -266,16 +266,16 @@ func (c *keyValueStoreClient) WatchKeyValue(ctx context.Context, in *WatchKeyVal
 	return x, nil
 }
 
-type KeyValueStore_WatchKeyValueClient interface {
+type KeyQuarry_WatchKeyValueClient interface {
 	Recv() (*WatchKeyValueResponse, error)
 	grpc.ClientStream
 }
 
-type keyValueStoreWatchKeyValueClient struct {
+type keyQuarryWatchKeyValueClient struct {
 	grpc.ClientStream
 }
 
-func (x *keyValueStoreWatchKeyValueClient) Recv() (*WatchKeyValueResponse, error) {
+func (x *keyQuarryWatchKeyValueClient) Recv() (*WatchKeyValueResponse, error) {
 	m := new(WatchKeyValueResponse)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
@@ -283,10 +283,10 @@ func (x *keyValueStoreWatchKeyValueClient) Recv() (*WatchKeyValueResponse, error
 	return m, nil
 }
 
-// KeyValueStoreServer is the server API for KeyValueStore service.
-// All implementations must embed UnimplementedKeyValueStoreServer
+// KeyQuarryServer is the server API for KeyQuarry service.
+// All implementations must embed UnimplementedKeyQuarryServer
 // for forward compatibility
-type KeyValueStoreServer interface {
+type KeyQuarryServer interface {
 	// Set sets a key/value pair. If the key already exists,
 	// it will be updated. If the key already exists and is
 	// locked, an error will be returned. If the key already
@@ -327,494 +327,494 @@ type KeyValueStoreServer interface {
 	GetRevision(context.Context, *GetRevisionRequest) (*RevisionResponse, error)
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	SetReadOnly(context.Context, *ReadOnlyRequest) (*ReadOnlyResponse, error)
-	WatchStream(*WatchRequest, KeyValueStore_WatchStreamServer) error
+	WatchStream(*WatchRequest, KeyQuarry_WatchStreamServer) error
 	GetKeyMetric(context.Context, *KeyMetricRequest) (*KeyMetric, error)
-	WatchKeyValue(*WatchKeyValueRequest, KeyValueStore_WatchKeyValueServer) error
-	mustEmbedUnimplementedKeyValueStoreServer()
+	WatchKeyValue(*WatchKeyValueRequest, KeyQuarry_WatchKeyValueServer) error
+	mustEmbedUnimplementedKeyQuarryServer()
 }
 
-// UnimplementedKeyValueStoreServer must be embedded to have forward compatible implementations.
-type UnimplementedKeyValueStoreServer struct {
+// UnimplementedKeyQuarryServer must be embedded to have forward compatible implementations.
+type UnimplementedKeyQuarryServer struct {
 }
 
-func (UnimplementedKeyValueStoreServer) Set(context.Context, *KeyValue) (*SetResponse, error) {
+func (UnimplementedKeyQuarryServer) Set(context.Context, *KeyValue) (*SetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Set not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Get(context.Context, *Key) (*GetResponse, error) {
+func (UnimplementedKeyQuarryServer) Get(context.Context, *Key) (*GetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Inspect(context.Context, *InspectRequest) (*InspectResponse, error) {
+func (UnimplementedKeyQuarryServer) Inspect(context.Context, *InspectRequest) (*InspectResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Inspect not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
+func (UnimplementedKeyQuarryServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Exists(context.Context, *Key) (*ExistsResponse, error) {
+func (UnimplementedKeyQuarryServer) Exists(context.Context, *Key) (*ExistsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Exists not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Pop(context.Context, *PopRequest) (*GetResponse, error) {
+func (UnimplementedKeyQuarryServer) Pop(context.Context, *PopRequest) (*GetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Pop not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Clear(context.Context, *ClearRequest) (*ClearResponse, error) {
+func (UnimplementedKeyQuarryServer) Clear(context.Context, *ClearRequest) (*ClearResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Clear not implemented")
 }
-func (UnimplementedKeyValueStoreServer) ListKeys(context.Context, *ListKeysRequest) (*ListKeysResponse, error) {
+func (UnimplementedKeyQuarryServer) ListKeys(context.Context, *ListKeysRequest) (*ListKeysResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListKeys not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Stats(context.Context, *EmptyRequest) (*ServerMetrics, error) {
+func (UnimplementedKeyQuarryServer) Stats(context.Context, *EmptyRequest) (*ServerMetrics, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Stats not implemented")
 }
-func (UnimplementedKeyValueStoreServer) ClearHistory(context.Context, *EmptyRequest) (*ClearHistoryResponse, error) {
+func (UnimplementedKeyQuarryServer) ClearHistory(context.Context, *EmptyRequest) (*ClearHistoryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ClearHistory not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Lock(context.Context, *LockRequest) (*LockResponse, error) {
+func (UnimplementedKeyQuarryServer) Lock(context.Context, *LockRequest) (*LockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Lock not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Unlock(context.Context, *UnlockRequest) (*UnlockResponse, error) {
+func (UnimplementedKeyQuarryServer) Unlock(context.Context, *UnlockRequest) (*UnlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Unlock not implemented")
 }
-func (UnimplementedKeyValueStoreServer) GetRevision(context.Context, *GetRevisionRequest) (*RevisionResponse, error) {
+func (UnimplementedKeyQuarryServer) GetRevision(context.Context, *GetRevisionRequest) (*RevisionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRevision not implemented")
 }
-func (UnimplementedKeyValueStoreServer) Register(context.Context, *RegisterRequest) (*RegisterResponse, error) {
+func (UnimplementedKeyQuarryServer) Register(context.Context, *RegisterRequest) (*RegisterResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Register not implemented")
 }
-func (UnimplementedKeyValueStoreServer) SetReadOnly(context.Context, *ReadOnlyRequest) (*ReadOnlyResponse, error) {
+func (UnimplementedKeyQuarryServer) SetReadOnly(context.Context, *ReadOnlyRequest) (*ReadOnlyResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetReadOnly not implemented")
 }
-func (UnimplementedKeyValueStoreServer) WatchStream(*WatchRequest, KeyValueStore_WatchStreamServer) error {
+func (UnimplementedKeyQuarryServer) WatchStream(*WatchRequest, KeyQuarry_WatchStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method WatchStream not implemented")
 }
-func (UnimplementedKeyValueStoreServer) GetKeyMetric(context.Context, *KeyMetricRequest) (*KeyMetric, error) {
+func (UnimplementedKeyQuarryServer) GetKeyMetric(context.Context, *KeyMetricRequest) (*KeyMetric, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetKeyMetric not implemented")
 }
-func (UnimplementedKeyValueStoreServer) WatchKeyValue(*WatchKeyValueRequest, KeyValueStore_WatchKeyValueServer) error {
+func (UnimplementedKeyQuarryServer) WatchKeyValue(*WatchKeyValueRequest, KeyQuarry_WatchKeyValueServer) error {
 	return status.Errorf(codes.Unimplemented, "method WatchKeyValue not implemented")
 }
-func (UnimplementedKeyValueStoreServer) mustEmbedUnimplementedKeyValueStoreServer() {}
+func (UnimplementedKeyQuarryServer) mustEmbedUnimplementedKeyQuarryServer() {}
 
-// UnsafeKeyValueStoreServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to KeyValueStoreServer will
+// UnsafeKeyQuarryServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to KeyQuarryServer will
 // result in compilation errors.
-type UnsafeKeyValueStoreServer interface {
-	mustEmbedUnimplementedKeyValueStoreServer()
+type UnsafeKeyQuarryServer interface {
+	mustEmbedUnimplementedKeyQuarryServer()
 }
 
-func RegisterKeyValueStoreServer(s grpc.ServiceRegistrar, srv KeyValueStoreServer) {
-	s.RegisterService(&KeyValueStore_ServiceDesc, srv)
+func RegisterKeyQuarryServer(s grpc.ServiceRegistrar, srv KeyQuarryServer) {
+	s.RegisterService(&KeyQuarry_ServiceDesc, srv)
 }
 
-func _KeyValueStore_Set_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_Set_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KeyValue)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).Set(ctx, in)
+		return srv.(KeyQuarryServer).Set(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/Set",
+		FullMethod: "/keyquarry.KeyQuarry/Set",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Set(ctx, req.(*KeyValue))
+		return srv.(KeyQuarryServer).Set(ctx, req.(*KeyValue))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Key)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).Get(ctx, in)
+		return srv.(KeyQuarryServer).Get(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/Get",
+		FullMethod: "/keyquarry.KeyQuarry/Get",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Get(ctx, req.(*Key))
+		return srv.(KeyQuarryServer).Get(ctx, req.(*Key))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_Inspect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_Inspect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(InspectRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).Inspect(ctx, in)
+		return srv.(KeyQuarryServer).Inspect(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/Inspect",
+		FullMethod: "/keyquarry.KeyQuarry/Inspect",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Inspect(ctx, req.(*InspectRequest))
+		return srv.(KeyQuarryServer).Inspect(ctx, req.(*InspectRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).Delete(ctx, in)
+		return srv.(KeyQuarryServer).Delete(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/Delete",
+		FullMethod: "/keyquarry.KeyQuarry/Delete",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Delete(ctx, req.(*DeleteRequest))
+		return srv.(KeyQuarryServer).Delete(ctx, req.(*DeleteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_Exists_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_Exists_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Key)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).Exists(ctx, in)
+		return srv.(KeyQuarryServer).Exists(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/Exists",
+		FullMethod: "/keyquarry.KeyQuarry/Exists",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Exists(ctx, req.(*Key))
+		return srv.(KeyQuarryServer).Exists(ctx, req.(*Key))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_Pop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_Pop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PopRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).Pop(ctx, in)
+		return srv.(KeyQuarryServer).Pop(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/Pop",
+		FullMethod: "/keyquarry.KeyQuarry/Pop",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Pop(ctx, req.(*PopRequest))
+		return srv.(KeyQuarryServer).Pop(ctx, req.(*PopRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_Clear_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_Clear_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ClearRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).Clear(ctx, in)
+		return srv.(KeyQuarryServer).Clear(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/Clear",
+		FullMethod: "/keyquarry.KeyQuarry/Clear",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Clear(ctx, req.(*ClearRequest))
+		return srv.(KeyQuarryServer).Clear(ctx, req.(*ClearRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_ListKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_ListKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListKeysRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).ListKeys(ctx, in)
+		return srv.(KeyQuarryServer).ListKeys(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/ListKeys",
+		FullMethod: "/keyquarry.KeyQuarry/ListKeys",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).ListKeys(ctx, req.(*ListKeysRequest))
+		return srv.(KeyQuarryServer).ListKeys(ctx, req.(*ListKeysRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_Stats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_Stats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).Stats(ctx, in)
+		return srv.(KeyQuarryServer).Stats(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/Stats",
+		FullMethod: "/keyquarry.KeyQuarry/Stats",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Stats(ctx, req.(*EmptyRequest))
+		return srv.(KeyQuarryServer).Stats(ctx, req.(*EmptyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_ClearHistory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_ClearHistory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).ClearHistory(ctx, in)
+		return srv.(KeyQuarryServer).ClearHistory(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/ClearHistory",
+		FullMethod: "/keyquarry.KeyQuarry/ClearHistory",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).ClearHistory(ctx, req.(*EmptyRequest))
+		return srv.(KeyQuarryServer).ClearHistory(ctx, req.(*EmptyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_Lock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_Lock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(LockRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).Lock(ctx, in)
+		return srv.(KeyQuarryServer).Lock(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/Lock",
+		FullMethod: "/keyquarry.KeyQuarry/Lock",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Lock(ctx, req.(*LockRequest))
+		return srv.(KeyQuarryServer).Lock(ctx, req.(*LockRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_Unlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_Unlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UnlockRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).Unlock(ctx, in)
+		return srv.(KeyQuarryServer).Unlock(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/Unlock",
+		FullMethod: "/keyquarry.KeyQuarry/Unlock",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Unlock(ctx, req.(*UnlockRequest))
+		return srv.(KeyQuarryServer).Unlock(ctx, req.(*UnlockRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_GetRevision_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_GetRevision_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetRevisionRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).GetRevision(ctx, in)
+		return srv.(KeyQuarryServer).GetRevision(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/GetRevision",
+		FullMethod: "/keyquarry.KeyQuarry/GetRevision",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).GetRevision(ctx, req.(*GetRevisionRequest))
+		return srv.(KeyQuarryServer).GetRevision(ctx, req.(*GetRevisionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_Register_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_Register_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).Register(ctx, in)
+		return srv.(KeyQuarryServer).Register(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/Register",
+		FullMethod: "/keyquarry.KeyQuarry/Register",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).Register(ctx, req.(*RegisterRequest))
+		return srv.(KeyQuarryServer).Register(ctx, req.(*RegisterRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_SetReadOnly_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_SetReadOnly_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReadOnlyRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).SetReadOnly(ctx, in)
+		return srv.(KeyQuarryServer).SetReadOnly(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/SetReadOnly",
+		FullMethod: "/keyquarry.KeyQuarry/SetReadOnly",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).SetReadOnly(ctx, req.(*ReadOnlyRequest))
+		return srv.(KeyQuarryServer).SetReadOnly(ctx, req.(*ReadOnlyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_WatchStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+func _KeyQuarry_WatchStream_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(KeyValueStoreServer).WatchStream(m, &keyValueStoreWatchStreamServer{stream})
+	return srv.(KeyQuarryServer).WatchStream(m, &keyQuarryWatchStreamServer{stream})
 }
 
-type KeyValueStore_WatchStreamServer interface {
+type KeyQuarry_WatchStreamServer interface {
 	Send(*Event) error
 	grpc.ServerStream
 }
 
-type keyValueStoreWatchStreamServer struct {
+type keyQuarryWatchStreamServer struct {
 	grpc.ServerStream
 }
 
-func (x *keyValueStoreWatchStreamServer) Send(m *Event) error {
+func (x *keyQuarryWatchStreamServer) Send(m *Event) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func _KeyValueStore_GetKeyMetric_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _KeyQuarry_GetKeyMetric_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KeyMetricRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(KeyValueStoreServer).GetKeyMetric(ctx, in)
+		return srv.(KeyQuarryServer).GetKeyMetric(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/keyquarry.KeyValueStore/GetKeyMetric",
+		FullMethod: "/keyquarry.KeyQuarry/GetKeyMetric",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValueStoreServer).GetKeyMetric(ctx, req.(*KeyMetricRequest))
+		return srv.(KeyQuarryServer).GetKeyMetric(ctx, req.(*KeyMetricRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _KeyValueStore_WatchKeyValue_Handler(srv interface{}, stream grpc.ServerStream) error {
+func _KeyQuarry_WatchKeyValue_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchKeyValueRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(KeyValueStoreServer).WatchKeyValue(m, &keyValueStoreWatchKeyValueServer{stream})
+	return srv.(KeyQuarryServer).WatchKeyValue(m, &keyQuarryWatchKeyValueServer{stream})
 }
 
-type KeyValueStore_WatchKeyValueServer interface {
+type KeyQuarry_WatchKeyValueServer interface {
 	Send(*WatchKeyValueResponse) error
 	grpc.ServerStream
 }
 
-type keyValueStoreWatchKeyValueServer struct {
+type keyQuarryWatchKeyValueServer struct {
 	grpc.ServerStream
 }
 
-func (x *keyValueStoreWatchKeyValueServer) Send(m *WatchKeyValueResponse) error {
+func (x *keyQuarryWatchKeyValueServer) Send(m *WatchKeyValueResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-// KeyValueStore_ServiceDesc is the grpc.ServiceDesc for KeyValueStore service.
+// KeyQuarry_ServiceDesc is the grpc.ServiceDesc for KeyQuarry service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var KeyValueStore_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "keyquarry.KeyValueStore",
-	HandlerType: (*KeyValueStoreServer)(nil),
+var KeyQuarry_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "keyquarry.KeyQuarry",
+	HandlerType: (*KeyQuarryServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "Set",
-			Handler:    _KeyValueStore_Set_Handler,
+			Handler:    _KeyQuarry_Set_Handler,
 		},
 		{
 			MethodName: "Get",
-			Handler:    _KeyValueStore_Get_Handler,
+			Handler:    _KeyQuarry_Get_Handler,
 		},
 		{
 			MethodName: "Inspect",
-			Handler:    _KeyValueStore_Inspect_Handler,
+			Handler:    _KeyQuarry_Inspect_Handler,
 		},
 		{
 			MethodName: "Delete",
-			Handler:    _KeyValueStore_Delete_Handler,
+			Handler:    _KeyQuarry_Delete_Handler,
 		},
 		{
 			MethodName: "Exists",
-			Handler:    _KeyValueStore_Exists_Handler,
+			Handler:    _KeyQuarry_Exists_Handler,
 		},
 		{
 			MethodName: "Pop",
-			Handler:    _KeyValueStore_Pop_Handler,
+			Handler:    _KeyQuarry_Pop_Handler,
 		},
 		{
 			MethodName: "Clear",
-			Handler:    _KeyValueStore_Clear_Handler,
+			Handler:    _KeyQuarry_Clear_Handler,
 		},
 		{
 			MethodName: "ListKeys",
-			Handler:    _KeyValueStore_ListKeys_Handler,
+			Handler:    _KeyQuarry_ListKeys_Handler,
 		},
 		{
 			MethodName: "Stats",
-			Handler:    _KeyValueStore_Stats_Handler,
+			Handler:    _KeyQuarry_Stats_Handler,
 		},
 		{
 			MethodName: "ClearHistory",
-			Handler:    _KeyValueStore_ClearHistory_Handler,
+			Handler:    _KeyQuarry_ClearHistory_Handler,
 		},
 		{
 			MethodName: "Lock",
-			Handler:    _KeyValueStore_Lock_Handler,
+			Handler:    _KeyQuarry_Lock_Handler,
 		},
 		{
 			MethodName: "Unlock",
-			Handler:    _KeyValueStore_Unlock_Handler,
+			Handler:    _KeyQuarry_Unlock_Handler,
 		},
 		{
 			MethodName: "GetRevision",
-			Handler:    _KeyValueStore_GetRevision_Handler,
+			Handler:    _KeyQuarry_GetRevision_Handler,
 		},
 		{
 			MethodName: "Register",
-			Handler:    _KeyValueStore_Register_Handler,
+			Handler:    _KeyQuarry_Register_Handler,
 		},
 		{
 			MethodName: "SetReadOnly",
-			Handler:    _KeyValueStore_SetReadOnly_Handler,
+			Handler:    _KeyQuarry_SetReadOnly_Handler,
 		},
 		{
 			MethodName: "GetKeyMetric",
-			Handler:    _KeyValueStore_GetKeyMetric_Handler,
+			Handler:    _KeyQuarry_GetKeyMetric_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "WatchStream",
-			Handler:       _KeyValueStore_WatchStream_Handler,
+			Handler:       _KeyQuarry_WatchStream_Handler,
 			ServerStreams: true,
 		},
 		{
 			StreamName:    "WatchKeyValue",
-			Handler:       _KeyValueStore_WatchKeyValue_Handler,
+			Handler:       _KeyQuarry_WatchKeyValue_Handler,
 			ServerStreams: true,
 		},
 	},

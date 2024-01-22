@@ -1,6 +1,6 @@
 package server
 
-var SQLite = sqlDialect{
+var SQLite = SQLDialect{
 	Driver:       "sqlite",
 	DriverPrefix: "sqlite://",
 	CreateSnapshotTable: `

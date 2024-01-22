@@ -2,127 +2,187 @@ package server
 
 import (
 	"context"
-	"errors"
 	"log/slog"
+	"sync"
 	"time"
 )
 
-// Pruner is used to prune keys from the store when the number of keys
-// exceeds the configured threshold. Pruner does it specifically on a
+// pruner is used to prune keys from the store when the number of keys
+// exceeds the configured pruneAt. pruner does it specifically on a
 // configured interval. Set Config.EagerPrune to true to prune keys
 // when they hit their limit, rather than waiting for the interval.
-type Pruner struct {
-	srv     *KeyValueStore
-	logger  *slog.Logger
-	t       *time.Ticker
-	started bool
+type pruner struct {
+	pruneAt      uint64 // pruneAt is copied from Config.PruneAt
+	pruneTo      uint64 // pruneTo is copied from Config.PruneTo
+	eagerPruneAt uint64
+	eagerPruneTo uint64
+	interval     time.Duration // interval is copied from Config.PruneInterval
+	srv          *Server
+	logger       *slog.Logger
+	t            *time.Ticker
+	mu           sync.Mutex
 }
 
-func (p *Pruner) Run(ctx context.Context) error {
-	p.logger = p.logger.With(
-		slog.Uint64("max_keys", p.srv.cfg.MaxNumberOfKeys),
-		slog.Float64("threshold", p.srv.cfg.PruneThreshold),
-		slog.Float64("target", p.srv.cfg.PruneTarget),
-		slog.Duration("interval", p.srv.cfg.PruneInterval),
-		slog.Bool("eager", p.srv.cfg.EagerPrune),
-	)
-	if p.started {
-		panic(errors.New("pruner already started"))
-	}
+func (p *pruner) Run(ctx context.Context) error {
 	p.logger.Info("starting pruner")
-	if p.t != nil {
-		p.t.Stop()
-	}
-	if p.srv.cfg.PruneInterval == 0 {
+
+	switch p.interval {
+	case 0:
 		p.t = &time.Ticker{}
 		p.t.Stop()
-	} else {
-		p.t = time.NewTicker(p.srv.cfg.PruneInterval)
+	default:
+		p.t = time.NewTicker(p.interval)
 	}
 	defer p.t.Stop()
 
-	p.started = true
 	for {
 		select {
 		case <-ctx.Done():
 			p.t.Stop()
 			return nil
 		case <-p.t.C:
-			p.logger.Info("pruning keys")
-			keysPruned, pruneErr := p.Prune(ctx)
+			if p.pruneAt == 0 {
+				p.logger.Debug("no key maximum, skipping scheduled prune")
+				continue
+			}
+			if p.srv.numKeys.Load() < p.pruneAt {
+				continue
+			}
+			go func() {
+				p.logger.Info("pruning keys")
+				keysPruned := p.Prune(ctx, p.pruneTo)
+				p.logger.Debug(
+					"finished pruning keys",
+					slog.Any("pruned", keysPruned),
+					slog.Uint64("new_count", p.srv.numKeys.Load()),
+				)
+			}()
+		case key := <-p.srv.eagerPruneCh:
+			if p.eagerPruneAt == 0 {
+				continue
+			}
+
+			currentCt := p.srv.numKeys.Load()
+			if currentCt < p.eagerPruneAt {
+				p.logger.Info(
+					"eager prune signal received, but key count is below eager prune threshold",
+					"current_count", currentCt,
+					"eager_prune_at", p.eagerPruneAt,
+				)
+				continue
+			}
+
+			p.logger.Info("received eager prune signal")
+			p.srv.numEagerPruneTriggered.Add(1)
+			keysPruned := p.Prune(ctx, p.eagerPruneTo, key)
 			p.logger.Debug(
 				"finished pruning keys",
 				slog.Any("pruned", keysPruned),
+				slog.Uint64("beginning_count", currentCt),
+				slog.Uint64("new_count", p.srv.numKeys.Load()),
 			)
-			if pruneErr != nil {
-				p.logger.Error(
-					"error pruning keys",
-					"error",
-					pruneErr,
-				)
-			}
 		}
 	}
 }
 
-// Prune deletes all unlocked keys past the configured threshold, to
-// the target lower threshold, if possible
-func (p *Pruner) Prune(ctx context.Context) ([]string, error) {
-	s := p.srv
+// Prune deletes all unlocked keys past the configured pruneAt, to
+// the pruneTo lower pruneAt, if possible
+func (p *pruner) Prune(
+	ctx context.Context,
+	targetCount uint64,
+	ignoreKey ...string,
+) []string {
+	reportedCt := p.srv.numKeys.Load()
+	if reportedCt < targetCount {
+		p.logger.Info(
+			"reported key count is below target",
+			"reported", reportedCt,
+			"target", targetCount,
+		)
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-	p.srv.cfgMu.RLock()
-	defer p.srv.cfgMu.RUnlock()
+	p.srv.mu.Lock()
+	defer p.srv.mu.Unlock()
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	pressure := p.srv.pressure()
+	p.logger.Info(
+		"starting prune",
+		"pressure", pressure,
+		"prune_to", targetCount,
+	)
 
-	s.lockMu.Lock()
-	defer s.lockMu.Unlock()
+	p.srv.keyStatMu.RLock()
 
-	s.reaperMu.Lock()
-	defer s.reaperMu.Unlock()
+	p.srv.lockMu.Lock()
+	defer p.srv.lockMu.Unlock()
 
-	s.keyStatMu.RLock()
-	defer s.keyStatMu.RUnlock()
+	p.srv.reaperMu.Lock()
+	defer p.srv.reaperMu.Unlock()
 
-	pressure := s.pressure()
-	s.logger.Info("starting prune", "pressure", pressure)
-	started := time.Now()
+	p.srv.hmu.Lock()
+	defer p.srv.hmu.Unlock()
 
-	if pressure.KeysOverThreshold < 0 {
-		s.logger.Info("actual count below threshold, skipping")
-		s.addPruneLog(PruneLog{Time: started, Eager: false})
-		return nil, nil
+	for lockedKey := range p.srv.locks {
+		ignoreKey = append(ignoreKey, lockedKey)
 	}
 
-	targetCount := uint64(float64(pressure.Max) * s.cfg.PruneTarget)
+	defer p.srv.numPruneCompleted.Add(1)
 
-	pruned := s.pruneNumKeys(ctx, int(targetCount), false)
+	p.logger.Info(
+		"pruning keys",
+		"target_count",
+		targetCount,
+	)
 
-	if len(pruned) == 0 {
-		s.addPruneLog(PruneLog{Time: started, Eager: false})
+	toRemove := p.srv.staleKeys(ctx, ignoreKey...)
+	removeLimit := reportedCt - targetCount
+	if int(removeLimit) > len(toRemove) {
+		removeLimit = uint64(len(toRemove))
 	}
-	return pruned, nil
-}
+	p.logger.Log(
+		ctx,
+		LevelNotice,
+		"identifying keys",
+		"limit",
+		removeLimit,
+		"reported",
+		reportedCt,
+	)
+	toRemove = toRemove[:removeLimit]
+	p.logger.Warn("targeting keys", "count", len(toRemove))
 
-type PruneLog struct {
-	Time       time.Time `json:"time"`
-	KeysPruned []string  `json:"keys_pruned"`
-	Eager      bool      `json:"eager"`
-}
-
-func NewPruner(srv *KeyValueStore) *Pruner {
-	p := &Pruner{
-		srv: srv,
-		logger: srv.logger.With(
-			slog.String(loggerKey, "pruner"),
-		).WithGroup("pruner"),
-	}
-	if srv.pruner != nil {
-		if srv.pruner.t != nil {
-			srv.pruner.t.Stop()
+	p.srv.keyStatMu.RUnlock()
+	removed := make([]string, 0)
+	for _, kvInfo := range toRemove {
+		key, removedKey := p.srv.expungeKey(kvInfo)
+		if removedKey {
+			removed = append(removed, key)
 		}
 	}
+	return removed
+}
+
+func newPruner(srv *Server) *pruner {
+	p := &pruner{
+		srv:          srv,
+		pruneAt:      srv.cfg.PruneAt,
+		pruneTo:      srv.cfg.PruneTo,
+		interval:     srv.cfg.PruneInterval,
+		eagerPruneAt: srv.cfg.EagerPruneAt,
+		eagerPruneTo: srv.cfg.EagerPruneTo,
+	}
+	p.logger = srv.logger.With(
+		slog.String(loggerKey, "pruner"),
+		slog.Uint64("prune_at", p.pruneAt),
+		slog.Uint64("prune_to", p.pruneTo),
+		slog.Duration("interval", p.interval),
+		slog.Uint64("eager_prune_at", p.eagerPruneAt),
+		slog.Uint64("eager_prune_to", p.eagerPruneTo),
+	).WithGroup("pruner")
+
 	srv.pruner = p
 	return p
 }

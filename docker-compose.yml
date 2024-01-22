@@ -30,9 +30,10 @@ services:
 #      KEYQUARRY_START_FRESH: 1
 
       # Prune configuration
-      KEYQUARRY_EAGER_PRUNE: 1
-      KEYQUARRY_PRUNE_TARGET: 0.80
-      KEYQUARRY_PRUNE_THRESHOLD: 0.90
+      KEYQUARRY_EAGER_PRUNE_AT: 25000
+      KEYQUARRY_EAGER_PRUNE_TO: 15000
+      KEYQUARRY_PRUNE_AT: 20000
+      KEYQUARRY_PRUNE_TO: 15000
       KEYQUARRY_PRUNE_INTERVAL: 15m
 
       # Key/value limits
@@ -46,6 +47,7 @@ services:
 #      KEYQUARRY_SSL_KEYFILE: /etc/ssl/certs/keyquarry.key
 
       KEYQUARRY_TRACE: true
+      KEYQUARRY_PROMETHEUS: true
 #      KEYQUARRY_PPROF: true
 #      KEYQUARRY_EXPVAR: true
       KEYQUARRY_MONITOR_ADDRESS: ":33970"
@@ -57,7 +59,7 @@ services:
 #      GRPC_GO_LOG_SEVERITY_LEVEL: info
     entrypoint:
       - "keyquarry"
-      - "server"
+      - "serve"
     command:
       - "--log-level"
       - "INFO"

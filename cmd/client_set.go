@@ -18,28 +18,27 @@ var setCmd = &cobra.Command{
 		var err error
 		key = args[0]
 
-		if len(args) == 2 {
+		switch len(args) {
+		case 2:
 			value = []byte(args[1])
-		} else {
+		default:
 			val, err := readStdin()
 			printError(err)
 			value = []byte(strings.Join(val, "\n"))
 		}
+
 		opts := &cliOpts
-		req := &pb.KeyValue{
-			Key:   key,
-			Value: value,
-		}
+		req := &pb.KeyValue{Key: key, Value: value}
+
 		if opts.clientOpts.LockTimeout > 0 {
 			req.LockDuration = durationpb.New(opts.clientOpts.LockTimeout)
 		}
+
 		if opts.clientOpts.KeyLifespan.Seconds() > 0 {
 			req.Lifespan = durationpb.New(opts.clientOpts.KeyLifespan)
 		}
-		kv, err := opts.client.Set(
-			ctx,
-			req,
-		)
+
+		kv, err := opts.client.Set(ctx, req)
 		printError(err)
 		printResult(kv)
 	},
