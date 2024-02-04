@@ -374,7 +374,7 @@ func (e *eventStream) Subscribe(
 	name string, // subscriber name
 	keys []string, // keys to subscribe to - leave empty to subscribe to all keys
 	events []KeyEvent, // events to subscribe to - leave empty to subscribe to all events
-) (chan Event, error) {
+) (<-chan Event, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 

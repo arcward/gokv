@@ -2279,7 +2279,7 @@ func (s *Server) Subscribe(
 	name string,
 	keys []string,
 	events []KeyEvent,
-) (chan Event, error) {
+) (<-chan Event, error) {
 	return s.eventStream.Subscribe(ctx, name, keys, events)
 }
 
@@ -2549,7 +2549,16 @@ func (s *Server) Stop(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			s.logger.Info("starting snapshot")
-			snapshot, err = s.Snapshot(context.Background())
+			var sfErr error
+			snapshot, sfErr = s.Snapshot(context.Background())
+			if sfErr != nil {
+				s.logger.Error(
+					"error creating final snapshot",
+					"error",
+					sfErr,
+				)
+				return
+			}
 			s.logger.Log(
 				ctx,
 				LevelNotice,
@@ -4347,6 +4356,22 @@ func NewConfig() *Config {
 	}
 	cfg.MonitorAddress = DefaultMonitorAddress
 	return cfg
+}
+
+func (c Config) Validate() error {
+	errs := []error{}
+	if c.PruneInterval > 0 && c.PruneTo > 0 && c.PruneTo > c.PruneAt {
+		errs = append(errs, fmt.Errorf("prune_to must be less than prune_at"))
+	}
+
+	if c.EagerPruneAt > 0 && c.EagerPruneAt <= c.EagerPruneTo {
+		errs = append(
+			errs,
+			fmt.Errorf("eager_prune_to must be less than eager_prune_at"),
+		)
+	}
+
+	return errors.Join(errs...)
 }
 
 // URL returns a url.URL for the configured ListenAddress
